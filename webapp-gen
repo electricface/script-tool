@@ -1,0 +1,368 @@
+#!/usr/bin/perl -w
+use strict;
+use Config::Tiny;
+use Getopt::Long qw(:config no_ignore_case);
+use Data::Dumper;
+use File::Copy;
+use File::Basename;
+use 5.14.2;
+my ($opt_install, $opt_remove, @opt_build, @opt_cfg ,$opt_dst);
+
+GetOptions(
+	"build=s{,}" => \@opt_build,
+	"config=s{,}" => \@opt_cfg,
+	"help!" => \&print_help_message,
+	"result=s" => \$opt_dst,
+	"I|test-install=s" => \$opt_install,
+	"R|test-remove=s" => \$opt_remove,
+	"dst=s" => \$opt_dst,
+);
+
+sub print_short_help {
+	print <<__EOF__
+-c --config [配置文件...]
+-b --build [图标文件...] 生成 deb 包
+--dst deb包生成位置
+-I --test-install <图标文件>  测试安装
+-R --test-remove <图标文件>   解除安装测试
+-h --help 详细帮助
+__EOF__
+;
+	exit;
+}
+
+sub print_help_message {
+	my $cmd = basename $0;
+	print <<__EOF__
+
+参数 
+-c --config [webapp 的配置文件...]
+
+ * 生成deb包
+-b --build [图标文件...] 生成deb包
+参数 --dst 指定deb包生成的位置,默认为 “$ENV{HOME}/reult”
+比如 $cmd -c abc.ini --build pixlr-editor.png --dst ~/下载
+
+ * 快速测试单个应用
+-I --test-install <图标文件> 测试安装
+-R --test-remove <图标文件> 解除测试安装
+-h -help  详细帮助
+
+
+ * 配置文件字段说明
+ [xxxx] xxxx 表示包名
+ Size —— web应用的窗口尺寸，如 1000x600 表示宽1000 高600
+ Url —— web应用的核心，链接地址，一般以 http:// 开头 
+ Homepage —— deb包信息中的主页
+ Name —— 应用图标名称
+ Comment —— 应用图标备注 ， deb 包信息中的描述
+ Version ——  deb 包信息中的版本
+ Categories ——  应用图标的分类
+ Maintainer —— deb 信息中的维护者
+
+ * 分类可选
+Education;Science;Game;Network;Utility;
+Office;Graphics;AudioVideo;Development;System
+__EOF__
+;
+	exit;
+}
+
+# BEGIN
+print_short_help() unless @opt_cfg;
+
+my $destination = $opt_dst // "$ENV{HOME}/result";
+our $BUILD_DIR = "/tmp/webapp-build";
+our $HTML_PATH = "/usr/share/deepin-webapps";
+our $PKG_NAME_PREFIX = "deepin-webapps-";
+our $ICON_PATH = "/usr/share/icons/hicolor/48x48/apps";
+our $APPS_PATH = "/usr/share/applications";
+our $DEEPIN_DOCK_FILTER = "/usr/share/dde/data/filter_wminstance.ini";
+my %webapp_dict;
+
+my %webapp_list;
+
+for my $cfg_file ( @opt_cfg ){
+	my $cfg;
+	unless ($cfg = Config::Tiny->new->read($cfg_file) ){
+		debug_say( "跳过配置文件 “$cfg_file” : ". Config::Tiny->errstr );
+		next;
+	}
+	debug_say( "Read cfg file $cfg_file" );
+	for my $pkg_name ( keys %{ $cfg } ){
+		$webapp_dict{$pkg_name} = $cfg;
+		my $cfg_bname = basename $cfg_file;
+		my $arr_ref = $webapp_list{$cfg_bname};
+		push @$arr_ref , $pkg_name;
+		$webapp_list{$cfg_bname} = $arr_ref;
+
+		debug_say(" -> $pkg_name in  $cfg");
+	}
+}
+
+if ( @opt_cfg && !@opt_build && !$opt_install && !$opt_remove  ){
+	for my $cfg (keys %webapp_list){
+		say " << $cfg >> ";
+		my $apps = $webapp_list{$cfg};
+		for my $a ( @$apps ) {
+			my $webapp_cfg = get_webapp_cfg($a);
+			my $cfg_ref = $webapp_cfg->{$a};
+			my $name = 
+				$cfg_ref->{"Name[zh_CN]"} //
+				$cfg_ref->{"Name"} // "<No Name>";
+			my $url = $cfg_ref->{"Url"} // "<No Url>";
+			say "$a\t$name\t$url" unless $a eq '_'; 
+		}
+	}
+}
+
+# -b --build
+for my $icon_path ( @opt_build ){
+	unless (-f $icon_path ){
+		say "图标文件不存在 $icon_path";
+		next;
+	}
+	my $webapp_cfg =  get_webapp_cfg($icon_path);
+	debug_say( "icon file: $icon_path");
+	build_debian_pkg($webapp_cfg,$icon_path, $destination) if defined $webapp_cfg;
+}
+
+if ( $opt_install ){
+	test_install($opt_install);
+}
+if ( $opt_remove ){
+	test_remove($opt_remove);
+}
+# END
+
+sub get_desktop_fields {
+	my ($cfg_ref, $start_with ) = @_; 
+	my @items = grep /^$start_with/ , keys %{ $cfg_ref };
+	my $item_fields = join "\n" , (map { "$_=". $cfg_ref->{$_} } @items);
+	return $item_fields;
+}
+
+sub get_webapp_cfg {
+	my $icon_path = shift;
+	my $pkg_name = fileparse $icon_path , '.png';
+	my $webapp_cfg ;
+	unless ( $webapp_cfg = $webapp_dict{$pkg_name} ){
+		say "出错了: 你给的 webapp 的配置文件不包含有关 `$pkg_name` 的信息";
+		return undef;
+	}
+	return $webapp_cfg;
+}
+
+sub write_desktop {
+	my ($webapp_cfg, $pkg_name) = @_;
+
+	my $cfg_ref = $webapp_cfg->{$pkg_name};
+	my ($w,$h) = split /x/ , $cfg_ref->{Size};
+	my $url = $cfg_ref->{Url};
+
+	my $name_fields= get_desktop_fields($cfg_ref , "Name");
+	my $comment_fields= get_desktop_fields($cfg_ref , "Comment");	
+
+	my $categories = $cfg_ref->{Categories};
+	my $desktop_fh;
+	my $desktop_path = "$BUILD_DIR/$APPS_PATH/$pkg_name.desktop";
+	$_ = dirname $desktop_path;
+	qx(mkdir -p $_);
+	open $desktop_fh , ">" , $desktop_path
+		or die "$! Can't write $desktop_path";
+	
+	my $desktop_file_content = <<__EOF__
+[Desktop Entry]
+Version=1.0
+$name_fields
+$comment_fields
+Type=Application
+Exec=/usr/bin/google-chrome --app=file://$HTML_PATH/$pkg_name.html?url=$url&width=$w&height=$h
+
+Icon=$pkg_name
+Categories=Network;$categories
+Terminal=false
+
+__EOF__
+;
+	print $desktop_fh $desktop_file_content;
+	debug_say("---" x 20, $desktop_file_content);
+	close $desktop_fh;
+	chmod 0755, $desktop_path; 
+}
+sub write_md5sum {
+	my $md5sum_path = "$BUILD_DIR/DEBIAN/md5sum";
+	open my $md5sum_fh ,'>', $md5sum_path;
+	my $md5sum_content=
+	qx{find $BUILD_DIR -type f -print0 |xargs -0 md5sum|grep -v $BUILD_DIR/DEBIAN/|sed "s#$BUILD_DIR/##"};
+	print $md5sum_fh $md5sum_content;
+	debug_say("---" x 20, $md5sum_content);
+	close $md5sum_fh;
+}
+
+sub build_tmp {
+	my ($webapp_cfg,$icon_path) = @_;
+	my $pkg_name = fileparse $icon_path , '.png';
+	my $cfg_ref = $webapp_cfg->{$pkg_name};
+
+	debug_say("Clean build directory");
+	qx(sudo rm -rf $BUILD_DIR);
+
+	set_app_icon( $icon_path );
+
+	write_html($pkg_name);
+	write_desktop($webapp_cfg,$pkg_name);
+	write_debian_ctrl($webapp_cfg, $pkg_name);
+	write_md5sum();
+	debug_system("tree $BUILD_DIR");
+	qx(find $BUILD_DIR -type d -print0|xargs -0 chmod a+rx);
+	qx(find $BUILD_DIR -type f -print0|xargs -0 chmod 644 -v );
+	qx(sudo chown root:root -R "$BUILD_DIR");
+	return 1;
+
+}
+
+sub build_debian_pkg {
+	my ($webapp_cfg,$icon_path,$storage_dir) = @_;
+	my $pkg_name = fileparse $icon_path , '.png';
+	my $lc_pkg_name = lc $pkg_name;
+	build_tmp($webapp_cfg , $icon_path);
+	qx(mkdir -p $storage_dir);
+	my $cfg_ref = $webapp_cfg->{$pkg_name};
+	my $version= $cfg_ref->{Version} // "1.0";
+	my $dst_pkg_path= 
+		"$storage_dir/$PKG_NAME_PREFIX" . $lc_pkg_name . "_$version" . "_all.deb";
+	my $dpkg_cmd="dpkg -b $BUILD_DIR $dst_pkg_path";
+	my $dpkg_result ;
+
+	#run dpkg -b command
+	unless ( $dpkg_result = qx($dpkg_cmd) ){
+			say "出错了！ 生成$PKG_NAME_PREFIX" . "$pkg_name 的 deb 包时失败了\t";
+			return;
+	}
+	debug_say( $dpkg_result );
+	say "OK. $dst_pkg_path";
+}
+
+sub test_install {
+	my $icon_path = shift;
+	my $webapp_cfg = get_webapp_cfg($icon_path);	
+	say "== FAST TEST INSTALL ==";
+	build_tmp($webapp_cfg , $icon_path);
+	system "sudo cp -vrf $BUILD_DIR/usr/* /usr/";
+}
+
+
+sub test_remove {
+	my $icon_path = shift;
+	my $webapp_cfg = get_webapp_cfg($icon_path);
+	say "== FAST TEST REMOVE ==";
+	build_tmp($webapp_cfg , $icon_path);
+	my @files = qx(find $BUILD_DIR -type f);
+	for my $f (@files){
+		if ($f !~ m{^$BUILD_DIR/DEBIAN} ){
+			$f =~ s/^$BUILD_DIR//;
+			system "sudo rm -v $f"
+		}
+	}
+}
+
+sub write_debian_ctrl {
+	my ($webapp_cfg, $pkg_name) = @_;	
+	my $lc_pkg_name = lc $pkg_name;
+
+	my $installed_size = `du -sk $BUILD_DIR`;
+	$installed_size = (split " ",$installed_size)[0];
+	my $cfg_ref = $webapp_cfg->{$pkg_name};
+
+	my $homepage = $cfg_ref->{Homepage};
+	my $version = $cfg_ref->{Version} // "1.0";
+	my $description = $cfg_ref->{Comment};
+	my $maintainer = $cfg_ref->{Maintainer} // $webapp_cfg->{_}->{Maintainer};
+	
+
+	my $debian_ctrl_path = "$BUILD_DIR/DEBIAN/control";
+	$_ = dirname $debian_ctrl_path;
+	qx(mkdir -p $_);
+	open my $debian_ctrl_fh ,'>',$debian_ctrl_path
+		or die "$! cant write $debian_ctrl_path";
+	my $debian_ctrl_content = <<__EOF__
+Package: $PKG_NAME_PREFIX$lc_pkg_name
+Version: $version
+Architecture: all
+Installed-Size: $installed_size
+Maintainer: $maintainer
+Depends: google-chrome-stable | google-chrome-beta | google-chrome-unstable, xdg-utils
+Priority: extra
+Section: web
+Homepage: $homepage
+Description: $description
+__EOF__
+;
+	debug_say("---" x 20 , $debian_ctrl_content);
+	print $debian_ctrl_fh $debian_ctrl_content;
+	close $debian_ctrl_fh;
+}
+
+sub set_app_icon {
+	my $icon_path = shift;
+	my $bname = basename $icon_path;
+	my $dst_icon_path = "$BUILD_DIR/$ICON_PATH/$bname";
+	qx(mkdir -p `dirname $dst_icon_path`);
+
+	debug_say("copy $icon_path, $dst_icon_path");
+
+	copy $icon_path, $dst_icon_path or die $!; 	
+}
+
+sub debug_say {
+	if (exists $ENV{DEBUG} && $ENV{DEBUG} ne 0){
+		say for @_;
+	}
+}
+
+sub debug_system {
+	if (exists $ENV{DEBUG} && $ENV{DEBUG} ne 0){
+		system @_;
+	}
+
+}
+
+sub write_html {
+	my $html_content = <<__EOF__
+<html>
+    <head>
+        <title>
+            Loading...
+        </title>
+    </head>
+    <script>
+        info = {}
+        var params = location.search.substring(1).split('&')
+        for (var i=0; i<params.length; i++) {
+            var p = params[i].split('=')
+            info[decodeURIComponent(p[0])] = decodeURIComponent(p[1])
+        }
+        w = info["width"]
+        h = info["height"]
+        url = info["url"]
+        if (w && h) {
+            window.resizeTo(w, h);
+            window.moveTo((screen.width - w) / 2, (screen.height-h) / 2)
+        }
+        window.location = url
+    </script>
+</html>
+__EOF__
+;
+	my $pkg_name = shift;
+	my $html_path = "$BUILD_DIR/$HTML_PATH/$pkg_name.html";
+	$_ = dirname $html_path;
+	qx(mkdir -p $_);
+	open my $html_fh , ">" , $html_path
+		or die "$! Can't write $html_path";
+	print $html_fh $html_content;
+	close $html_fh;
+
+}
+
