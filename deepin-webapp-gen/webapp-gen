@@ -100,9 +100,10 @@ for my $cfg_file ( @opt_cfg ){
 	}
 }
 
+
 if ( @opt_cfg && !@opt_build && !$opt_install && !$opt_remove  ){
 	for my $cfg (keys %webapp_list){
-		say " << $cfg >> ";
+		say "\n【$cfg】";
 		my $apps = $webapp_list{$cfg};
 		for my $a ( @$apps ) {
 			my $webapp_cfg = get_webapp_cfg($a);
@@ -111,7 +112,13 @@ if ( @opt_cfg && !@opt_build && !$opt_install && !$opt_remove  ){
 				$cfg_ref->{"Name[zh_CN]"} //
 				$cfg_ref->{"Name"} // "<No Name>";
 			my $url = $cfg_ref->{"Url"} // "<No Url>";
-			say "$a\t$name\t$url" unless $a eq '_'; 
+			#$url =~ s/\s//g;
+format WEB_APP_OUT =
+@<<<<<<<<<<<<<<<@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< 
+$a,$name,$url
+.
+			$~ = 'WEB_APP_OUT';
+			write unless $a eq '_'; 
 		}
 	}
 }
@@ -165,7 +172,8 @@ sub write_desktop {
 
 	my $categories = $cfg_ref->{Categories};
 	my $desktop_fh;
-	my $desktop_path = "$BUILD_DIR/$APPS_PATH/$pkg_name.desktop";
+	my $v_pkg_name = vaild_pkg_name($pkg_name);
+	my $desktop_path = "$BUILD_DIR/$APPS_PATH/$v_pkg_name.desktop";
 	$_ = dirname $desktop_path;
 	qx(mkdir -p $_);
 	open $desktop_fh , ">" , $desktop_path
@@ -208,7 +216,7 @@ sub build_tmp {
 	debug_say("Clean build directory");
 	qx(sudo rm -rf $BUILD_DIR);
 
-	set_app_icon( $icon_path );
+	set_icon( $icon_path );
 
 	write_html($pkg_name);
 	write_desktop($webapp_cfg,$pkg_name);
@@ -222,16 +230,22 @@ sub build_tmp {
 
 }
 
+sub vaild_pkg_name {
+	my $name = shift;
+	$name =~ s/[!@#$%&*()_+=.]/-/g;
+	return lc $name;
+}
+
 sub build_debian_pkg {
 	my ($webapp_cfg,$icon_path,$storage_dir) = @_;
 	my $pkg_name = fileparse $icon_path , '.png';
-	my $lc_pkg_name = lc $pkg_name;
+	my $v_pkg_name = vaild_pkg_name($pkg_name);
 	build_tmp($webapp_cfg , $icon_path);
 	qx(mkdir -p $storage_dir);
 	my $cfg_ref = $webapp_cfg->{$pkg_name};
 	my $version= $cfg_ref->{Version} // "1.0";
 	my $dst_pkg_path= 
-		"$storage_dir/$PKG_NAME_PREFIX" . $lc_pkg_name . "_$version" . "_all.deb";
+		"$storage_dir/$PKG_NAME_PREFIX" . $v_pkg_name . "_$version" . "_all.deb";
 	my $dpkg_cmd="dpkg -b $BUILD_DIR $dst_pkg_path";
 	my $dpkg_result ;
 
@@ -269,7 +283,7 @@ sub test_remove {
 
 sub write_debian_ctrl {
 	my ($webapp_cfg, $pkg_name) = @_;	
-	my $lc_pkg_name = lc $pkg_name;
+	my $v_pkg_name = vaild_pkg_name($pkg_name);
 
 	my $installed_size = `du -sk $BUILD_DIR`;
 	$installed_size = (split " ",$installed_size)[0];
@@ -287,7 +301,7 @@ sub write_debian_ctrl {
 	open my $debian_ctrl_fh ,'>',$debian_ctrl_path
 		or die "$! cant write $debian_ctrl_path";
 	my $debian_ctrl_content = <<__EOF__
-Package: $PKG_NAME_PREFIX$lc_pkg_name
+Package: $PKG_NAME_PREFIX$v_pkg_name
 Version: $version
 Architecture: all
 Installed-Size: $installed_size
@@ -304,9 +318,10 @@ __EOF__
 	close $debian_ctrl_fh;
 }
 
-sub set_app_icon {
+sub set_icon {
 	my $icon_path = shift;
 	my $bname = basename $icon_path;
+
 	my $dst_icon_path = "$BUILD_DIR/$ICON_PATH/$bname";
 	qx(mkdir -p `dirname $dst_icon_path`);
 
@@ -356,7 +371,8 @@ sub write_html {
 __EOF__
 ;
 	my $pkg_name = shift;
-	my $html_path = "$BUILD_DIR/$HTML_PATH/$pkg_name.html";
+	my $v_pkg_name = vaild_pkg_name($pkg_name);
+	my $html_path = "$BUILD_DIR/$HTML_PATH/$v_pkg_name.html";
 	$_ = dirname $html_path;
 	qx(mkdir -p $_);
 	open my $html_fh , ">" , $html_path
