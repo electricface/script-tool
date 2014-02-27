@@ -1,0 +1,136 @@
+#!/usr/bin/perl -w
+use strict;
+use 5.14.2;
+use File::Basename;
+my $PPA_DIR_PATH = "/etc/apt/sources.list.d";
+use Getopt::Std;
+my %opt;
+getopt 'hclLi:w:a:r:' , \%opt;
+
+my @ppa_arr;
+my @ppa_name_list;
+
+
+for my $ppa_file_path (glob "$PPA_DIR_PATH/*.list"){
+	open my $ppa_fh , '<' ,$ppa_file_path;
+	my $file_name = basename $ppa_file_path;
+	my ( $deb_str, $ppa_name );
+	for my $str (<$ppa_fh> ){
+		if( $str =~ /^\s*deb/ ){
+			($ppa_name) = ( $str =~ m[ppa.launchpad.net/(.*)/ubuntu] );
+			my $ppa_dict = {
+				file_name => $file_name,
+				ppa_name => $ppa_name // $file_name,
+				deb_str =>  $str,
+			};
+			push @ppa_arr,$ppa_dict;
+			push @ppa_name_list, $ppa_name // $file_name;
+			last;	
+		}
+	}
+	close $ppa_fh;
+}
+
+if (exists $opt{c}){
+	for ( @ppa_name_list ){
+		print $_,' ' if defined $_;
+	}
+	exit;
+} elsif (exists $opt{h}){
+	print_help_message();
+	exit;
+} elsif (exists $opt{l}){
+	print_active_ppa();
+} elsif (exists $opt{L}){
+	system "ls --color=auto $PPA_DIR_PATH";
+} elsif (defined $opt{r}){
+	if ( $opt{r}  eq 'all'){
+		remove_all_ppa();
+	} else {
+		remove_ppa($opt{r});
+	}
+} elsif (defined $opt{a}){
+	add_ppa($opt{a});
+} elsif (defined $opt{w}){
+	my $url = ppa_packages_page($opt{w});
+	say "w3m " . $url;
+	system "w3m " . $url;
+} elsif (defined $opt{i}){
+	my $url = ppa_index_page($opt{i});
+	say "w3m " . $url;
+	system "w3m " . $url;	
+} else {
+	print_help_message();
+	exit;
+}
+
+#end
+sub print_active_ppa {
+	for my $arr_ref ( @ppa_arr ){
+		say $arr_ref->{file_name};
+		say "ppa:",
+			$arr_ref->{ppa_name}; 
+		say $arr_ref->{deb_str};
+	}
+}
+
+sub remove_ppa {
+	my $ppa_name = shift;
+	$ppa_name =~ s/^ppa://;
+	my $ppa_like_a_file = "$PPA_DIR_PATH/$ppa_name";
+	if ( -f $ppa_like_a_file ){
+		say "rm file $ppa_like_a_file ";
+		qx(sudo rm $ppa_like_a_file );
+	} else {
+		say "remove ppa:$ppa_name";
+		qx( sudo add-apt-repository -yr ppa:$ppa_name );
+	}
+}
+
+
+sub remove_all_ppa {
+	remove_ppa($_) for @ppa_name_list;
+}
+
+sub add_ppa {
+	my $ppa_name = shift;
+	$ppa_name =~ s/^ppa://;
+	say "add ppa:$ppa_name";
+	qx( sudo add-apt-repository -y ppa:$ppa_name );
+
+}
+
+sub ppa_packages_page {
+	my $ppa_name = shift;
+	$ppa_name =~ s/^ppa://;
+	my ($team_name, $project_name) = (split /\//, $ppa_name); 
+	return "https://launchpad.net/~$team_name/+archive/$project_name/+packages";
+}
+
+sub ppa_index_page {
+	my $ppa_name = shift;
+	$ppa_name =~ s/^ppa://;
+	return "http://ppa.launchpad.net/$ppa_name/ubuntu/pool/main/"; 
+}
+
+sub print_help_message {
+	my $w3m_status;
+	$_ = `which w3m`;
+	chomp;
+	if (-f){
+		$w3m_status='';
+	} else {
+		$w3m_status = "\n w3m Not Installed";
+	}
+	print <<_EOF_ ;
+-r <ppa>  remove ppa
+-r all    remove all ppa
+-a <ppa>  add ppa
+-l 	  list acitve ppa
+-L 	  colored file list of directory "$PPA_DIR_PATH"
+-c 	  list acitve ppa for bash complete
+-h 	  help$w3m_status
+-w <ppa>  use w3m to view ppa packages web page
+-i <ppa>  use w3m to view index of launchpad ppa web page
+_EOF_
+}

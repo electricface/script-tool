@@ -1,0 +1,184 @@
+#!/usr/bin/perl -w
+use 5.14.2;
+use strict;
+use Config::Tiny;
+use Getopt::Std;
+use File::Basename;
+use Data::Dumper;
+use File::Slurp;
+use File::Temp 'tempfile';
+my $APT_SOURCE_LIST = "/etc/apt/sources.list";
+my $MIRROR_INI_DIR = "/usr/share/deepin-software-center/mirrors";
+
+sub get_mirror_info_str {
+	my $hashref = shift;
+	my $deepin_url = $hashref->{"deepin_url"};
+	my $ubuntu_url = $hashref->{"ubuntu_url"};
+	my $name = $hashref->{"name_zh_CN"};
+	my $file_path = $hashref->{"file_path"};
+
+	return <<_EOF_ ;
+
+#<mirror-info
+#deepin_url=$deepin_url
+#ubuntu_url=$ubuntu_url
+#name_zh_CN=$name
+#file_path=$file_path
+#mirror-info>
+_EOF_
+}
+
+
+my $original_sources = <<_EOF_;
+deb http://packages.linuxdeepin.com/ubuntu raring main restricted universe multiverse
+deb http://packages.linuxdeepin.com/ubuntu raring-security main restricted universe multiverse
+deb http://packages.linuxdeepin.com/ubuntu raring-updates main restricted universe multiverse
+# deb http://packages.linuxdeepin.com/ubuntu raring-proposed main restricted universe multiverse
+# deb http://packages.linuxdeepin.com/ubuntu raring-backports main restricted universe multiverse
+deb-src http://packages.linuxdeepin.com/ubuntu raring main restricted universe multiverse
+deb-src http://packages.linuxdeepin.com/ubuntu raring-security main restricted universe multiverse
+deb-src http://packages.linuxdeepin.com/ubuntu raring-updates main restricted universe multiverse
+# deb-src http://packages.linuxdeepin.com/ubuntu raring-proposed main restricted universe multiverse
+# deb-src http://packages.linuxdeepin.com/ubuntu raring-backports main restricted universe multiverse
+
+deb http://packages.linuxdeepin.com/deepin raring main universe non-free
+deb-src http://packages.linuxdeepin.com/deepin raring main universe non-free
+#deb http://packages.linuxdeepin.com/deepin raring-updates main universe non-free
+#deb-src http://packages.linuxdeepin.com/deepin raring-updates main universe non-free
+#<mirror-info
+#deepin_url=http://packages.linuxdeepin.com/deepin
+#ubuntu_url=http://packages.linuxdeepin.com/ubuntu
+#name_zh_CN=官方源
+#file_path=/usr/share/deepin-software-center/mirrors/packages.linuxdeepin.com.ini
+#mirror-info>
+_EOF_
+
+my $source_list_text = read_file( $APT_SOURCE_LIST );
+my %mirror_info_dict;
+my %url;
+
+if ( $source_list_text =~ /#<mirror-info(.*)#mirror-info>/s ){
+	for (split /\n/ , $1){
+		if ( /^#([^=]+)=(.*)$/ ){
+			$mirror_info_dict{$1} = $2;
+		}
+	}
+	$mirror_info_dict{in_file} = 1;
+} else {
+	$mirror_info_dict{in_file} = 0;
+
+	my %urls_count;
+	for ( split /\n/, $source_list_text ){
+		if ( /^\s*deb\s+(\S+)\s+/ ){
+			$urls_count{$1} = 1;
+		}
+	}
+	my @urls = keys %urls_count;
+	my %filepath_count;
+	for (@urls){
+		my $grep_ret = qx( grep $_ $MIRROR_INI_DIR/* );
+		my $filepath = (split /:/,$grep_ret)[0];
+		$filepath_count{$filepath}++ if defined $filepath;
+	}
+	say for @urls;
+	print Dumper \%filepath_count;
+
+	my @filepath_arr = keys %filepath_count;
+	@filepath_arr = sort { $filepath_count{$b}  <=> $filepath_count{$a} } @filepath_arr;
+	$mirror_info_dict{file_path} = $filepath_arr[0];
+
+	my $mirror_cfg = Config::Tiny->new;
+	$mirror_cfg = Config::Tiny->read( $mirror_info_dict{"file_path"} );
+	$mirror_info_dict{"ubuntu_url"} = $mirror_cfg->{mirror}{ubuntu_url};
+	$mirror_info_dict{"deepin_url"} = $mirror_cfg->{mirror}{deepin_url};
+	$mirror_info_dict{"name_zh_CN"} = $mirror_cfg->{mirror}{"name[zh_CN]" };
+}
+
+sub print_info {
+	for my $keys ( qw<name_zh_CN file_path deepin_url ubuntu_url> ){
+		say $keys,' => ',$mirror_info_dict{ $keys };
+	}
+}
+
+my %opt;
+getopt 'lhm:', \%opt;
+if (exists $opt{l}) {
+	exec "ls","--color=auto", $MIRROR_INI_DIR;
+}
+elsif (exists $opt{h} ){
+	help_message();
+}
+elsif ($opt{m}){
+	modify_mirror( $opt{m} ); 
+}
+else {
+	say "No action: print info ";
+	print_info();
+}
+exit;
+
+
+sub sudo_write_soure_list {
+	my $text = shift;
+	my ($temp_fh,$temp_file_path) = tempfile();
+	print $temp_fh $text;
+	close $temp_fh;
+
+	qx(sudo mv $temp_file_path $APT_SOURCE_LIST);
+	#(rw-r--r--)
+	qx(chmod 0644 $APT_SOURCE_LIST);
+	qx(sudo chown root:root $APT_SOURCE_LIST);
+}
+
+sub modify_mirror {	
+	#trim 
+	my $mirror_ini = shift =~ s/^\s+//r;
+
+	my $mirror_ini_path = "$MIRROR_INI_DIR/" . basename( $mirror_ini);
+
+	my $mirror_cfg = Config::Tiny->new;
+	if ( -f $mirror_ini_path ){
+		$mirror_cfg = Config::Tiny->read($mirror_ini_path); 
+	} else {
+		die "can't find file `$mirror_ini_path`";
+	}
+
+	my $deepin_url = $mirror_cfg->{mirror}{deepin_url};
+	my $ubuntu_url = $mirror_cfg->{mirror}{ubuntu_url};
+	
+	say "ubuntu: " . $mirror_info_dict{"ubuntu_url"} ."\n".
+		"deepin: " . $mirror_info_dict{"deepin_url"} ."\n". "-" x qx(tput cols);
+
+	my %new_mirror_info = (
+		deepin_url => $deepin_url,
+		ubuntu_url => $ubuntu_url,
+		file_path => $mirror_ini_path,
+		name_zh_CN => $mirror_cfg->{mirror}{"name[zh_CN]"} // $mirror_cfg->{mirror}{name},
+	);
+
+
+	if ( $mirror_info_dict{in_file} ){
+		for my $key (keys %new_mirror_info ){
+			$source_list_text =~ s(#$key=.*)[#$key=$new_mirror_info{$key}];
+		}
+	} else {
+		$source_list_text .= get_mirror_info_str( \%new_mirror_info );
+	}
+
+	$source_list_text =~ s/$mirror_info_dict{"deepin_url"}/$deepin_url/g;
+	$source_list_text =~ s/$mirror_info_dict{ubuntu_url}/$ubuntu_url/g;
+
+	print $source_list_text;
+	sudo_write_soure_list( $source_list_text );
+
+}
+
+
+sub help_message {
+	print <<__
+-l list mirror ini
+-m <ini file> change mirror to it
+-h show help
+__
+};
+
