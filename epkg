@@ -1,0 +1,220 @@
+#!/bin/bash
+print_help (){
+	cat <<==
+Options:
+  -t Write template 'A' file to start work
+  -b build debian package
+  -h Show help
+Functions can be use in A :
+  cp_to <dist dir> <files...>
+  desktop <file>
+  bin <file...>
+  icon48 <picture.png>
+  no_md5sum
+  write_desktop <name>
+  \- desktop_shortcut <text>
+  \- desktop_add <text>
+  depends32 <string>
+  exec_sh <sh-scrpit>
+  write_bin_sh <sh-script>
+  gz_man <readme>
+  man1 <readme>
+==
+	exit
+}
+
+pkg_uppercase_dirname (){
+	dir_name="$*"
+	if [[ -d "$dir_name" ]];then
+		dir_name=`basename "$dir_name"`
+		dir_name=${dir_name// /_}
+		dir_name=${dir_name^^}
+		echo $dir_name
+	fi
+}
+
+write_template (){
+	pkg_uppercase_dirname=`pkg_uppercase_dirname $1`
+	cat > "$1/A" <<==
+#!/bin/bash
+pkg=$(basename $1)
+$pkg_uppercase_dirname="/usr/share/$1"
+name=""
+categories= #Education;Science;Game;Network;Utility;Office;Graphics;AudioVideo;Development;System
+version=
+arch=all #|all|amd64|i368
+breaks=\$pkg
+depends=""
+section=gnome
+homepage=""
+description=""
+exec="\$$pkg_uppercase_dirname/..."
+icon=\$pkg
+icon48 \$pkg.png 
+write_desktop \$pkg
+cp_to \$$pkg_uppercase_dirname
+==
+}
+
+depends32 (){
+	local deps="$@"
+	#not end with ,
+	[[ ! "$depends" =~ \.*,$ ]] && depends+=,
+	[ "$depends" = , ] && depends=
+	for d in ${deps//,/ } ;do
+		depends+=$d:i386,
+	done
+	arch=all
+	local len=${#depends}
+	let len=len-1
+	if [ ${depends[@]:len} = , ] ;then
+		depends=${depends[@]::len}
+	fi
+}
+
+cp_to (){
+	local dir="$build/$1"
+	mkdir -p "$dir"
+	for i in "${@:2}" ;do
+		cp -rp "$i" "$dir"
+	done
+}
+bin (){
+	cp_to usr/bin "$@"
+}
+
+gz_man (){
+	mkdir -p "$build/usr/share/man/man$1/"
+	gzip -c "$2" > "$build/usr/share/man/man$1/$pkg.$1.gz"
+}
+man1 (){
+	gz_man 1 "$1"
+}
+icon48 (){
+	mkdir -p "$build/usr/share/icons/hicolor/48x48/apps/"
+	cp -p "$1" "$build/usr/share/icons/hicolor/48x48/apps/$pkg.png"
+}
+
+desktop (){
+	cp_to usr/share/applications "$@"	
+}
+
+write_desktop (){
+	apps="$build/usr/share/applications"
+	mkdir -p "$apps"
+	i_desktop="$apps/$1.desktop" 
+	cat >"$i_desktop" <<==	
+[Desktop Entry]
+Name=$name
+Type=Application
+Exec=$exec
+Icon=$icon
+Categories=$categories
+Terminal=$term
+==
+}
+desktop_shortcut (){
+	cat >>$i_desktop <<==
+
+[$1 Shortcut Group]
+$2
+==
+}
+desktop_add (){
+cat >>$i_desktop <<==
+$1
+==
+}
+
+write_bin_sh (){
+	mkdir -p "$build/usr/bin"
+	local run="$build/usr/bin/$1"
+	cat > "$run" <<==
+#!/bin/sh
+$2
+==
+	chmod a+x "$run"
+}
+
+exec_sh (){
+	local cmd
+	while read line ;do
+		[ -z "$line" ] && continue
+		 cmd1l+=$line'; '
+	done <<<"$1"
+	exec="sh -c '$cmd1l'"
+	write_bin_sh $pkg "$1"
+}
+
+write_script (){
+	for f in $@ ;do
+		local func=`type $f 2>/dev/null |sed '1d'`
+		[ -z "$func" ] && continue
+		cat >$build/DEBIAN/$f <<==
+#!/bin/bash
+set -e
+$func
+$f \$@
+==
+		chmod +x $build/DEBIAN/$f
+	done
+}
+
+write_contorl (){
+mkdir -p $build/DEBIAN
+cat >$build/DEBIAN/control <<==
+Package: $pkg
+Version: $version
+Architecture: $arch
+Maintainer: $maintainer
+Installed-Size: $installed_size
+Depends: $depends
+Recommends: $recommends
+Suggests: $suggests
+Breaks: $breaks
+Priority: $priority
+Section: $section
+Homepage: $homepage
+Description: $description
+==
+}
+
+write_md5sum (){
+	[ "$NO_MD5SUM" = 1 ] && return 0
+	find $build -type f -print0 |xargs -0 md5sum|grep -v $build/DEBIAN/|
+	sed "s#$build/##" > $build/DEBIAN/md5sum
+}
+no_md5sum (){
+	NO_MD5SUM=1
+}
+
+build_pkg (){
+	content=$1
+	sudo rm -rf $build
+	cd $content
+	ls
+	find -type d -print0|xargs -0 chmod a+rx
+
+	: ${maintainer:="nobody <nobody@nobody.com>"}
+	priority=optional
+	term=false
+	. A
+
+	installed_size=(`du -sk $build`)
+	write_contorl
+	write_script preinst prerm postinst postrm
+	write_md5sum
+	sudo chown root:root -R "$build"
+	mkdir -p $storage
+	sudo dpkg -b $build $storage/${pkg}_${version}_$arch.deb
+}
+
+: ${storage:=$HOME/epkg-storage} ${build:=$HOME/epkg-build}
+#begin
+while getopts "hb:t:" arg ;do
+	case $arg in
+	h)print_help ;;
+	b)build_pkg  $OPTARG ;;
+	t)write_template $OPTARG ;;
+	esac
+done

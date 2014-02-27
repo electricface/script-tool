@@ -1,0 +1,154 @@
+#!/usr/bin/perl -w
+use strict;
+use File::Basename;
+use File::Temp 'tempfile';
+use File::Spec::Functions 'canonpath';
+use Getopt::Long qw(:config no_ignore_case);
+use File::Slurp;
+use 5.14.2;
+my $GRUB_CUSTOM_PATH ='/etc/grub.d/40_custom';
+
+my ($tempf_fh,$tempf_path) = tempfile();
+my $grub_custom_content ='';
+$grub_custom_content = read_file($GRUB_CUSTOM_PATH)
+	if ( -f -r $GRUB_CUSTOM_PATH );
+
+my (@opt_add, @opt_delete, $opt_list, $opt_update_grub );
+GetOptions(
+	"add=s{,}" => \@opt_add,
+	"delete=s{,}" => \@opt_delete,
+	"list!" => \$opt_list,
+	"help!" => \&print_help_message,
+	"update-grub" => \$opt_update_grub,
+);
+
+if ( $opt_list ){
+	list_grub_custom();
+	exit;
+}
+my $GRUB_CUSTOM_HEAD ='#!/bin/sh
+exec tail -n +4 $0
+#don\'t delete `exec` line;
+';
+
+#add executable head if need
+if ($grub_custom_content !~ /exec tail/){
+	$grub_custom_content = $GRUB_CUSTOM_HEAD . $grub_custom_content;
+}
+
+
+for (@opt_add){
+	my ($menu_entry, $new_str )= get_entry_define_str($_);
+	if ( $grub_custom_content !~ /$menu_entry/ ){
+		#append;
+		$grub_custom_content .= $new_str;
+	}
+};
+
+for ( @opt_delete ){
+	my $menu_entry = get_entry($_);
+	$grub_custom_content =~ s/#start:$menu_entry.*#end:$menu_entry//s
+}
+
+if ( @opt_add || @opt_delete || $opt_update_grub ){
+	do_with_temp_file();
+
+	if ( $opt_update_grub ){
+		qx(sudo update-grub);
+	}
+
+} else {
+	print_help_message();
+}
+#end;
+
+sub print_help_message {
+	print <<_EOF_;
+-a -add <iso> add iso 
+-d --delete <iso> rm iso
+-u --update-grub run `grub-update` command
+-l --list list iso found in $GRUB_CUSTOM_PATH;
+-h --help show help message
+_EOF_
+exit;
+}
+
+sub list_grub_custom {
+my ($menu_entry,$iso_path);
+format LS_GRUB_CUSTOM =
+@<<<<<<<<<<<<<<<<<<<<<<<<<<<< @| @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$menu_entry,'--',$iso_path
+.
+	$~ = 'LS_GRUB_CUSTOM';
+	for (split /\n/, $grub_custom_content ){
+		if ( /^#start:(.*),path:(.*)$/ ){
+			$menu_entry=$1;
+			$iso_path=$2;
+			write;
+		}
+	}
+}
+
+sub do_with_temp_file {
+	print $tempf_fh $grub_custom_content;
+	close $tempf_fh;
+	qx(sudo mv $tempf_path $GRUB_CUSTOM_PATH);
+	qx(sudo chmod 0755 $GRUB_CUSTOM_PATH);
+	qx(sudo chown root:root $GRUB_CUSTOM_PATH);
+
+}
+
+END { 
+	unlink $tempf_path;
+}
+
+
+sub get_disk_and_mntpoint {
+	my $iso_path =shift;
+	my @mnts = qx(findmnt -rc);
+	@mnts = map { [ split /\s/,$_ ] } @mnts;
+	my @match_result = grep { $iso_path =~ /^$_->[0]/ } @mnts;
+	my @sorted_match_result = sort { 
+		length($b->[0]) <=> length($a->[0]) } @match_result;
+	my $device = $sorted_match_result[0]->[1];
+	my $mnt_point = $sorted_match_result[0]->[0];
+	if ($device =~ m[/dev/sd([a-z])(\d+)] ){
+		my $num = ord( $1 ) - ord( 'a');
+		return "(hd$num,msdos$2)",$mnt_point;
+	}
+}
+
+sub get_entry {
+	my $iso_path =shift;
+	my $menu_entry = fileparse($iso_path,'.iso');
+	$menu_entry =~ s/-/ /g;
+	return $menu_entry;
+}
+
+sub get_entry_define_str {
+	my $iso_path = shift;
+	my ($menu_entry,$path,$suffix) = fileparse( $iso_path, '.iso' );
+	my $cpath = canonpath( "$path/$menu_entry.iso" );
+	if ( -f $cpath ){
+		say STDERR "Found iso $cpath";
+	} else {
+		say STDERR "Not found iso file ”$cpath“";
+		exit;
+	};
+	$menu_entry =~ s/-/ /g;
+	my ($root_disk,$mnt_point) = get_disk_and_mntpoint($cpath) ;
+	
+	my $grub_path = $cpath =~ s/^$mnt_point//r;
+
+	return $menu_entry, <<_EOF_ ;
+#start:$menu_entry,path:$cpath
+menuentry "$menu_entry" {
+	set root=$root_disk
+	insmod loopback
+	loopback lop $root_disk$grub_path
+	linux (lop)/casper/vmlinuz boot=casper iso-scan/filename=$grub_path noprompt noeject
+	initrd (lop)/casper/initrd.lz
+}
+#end:$menu_entry
+_EOF_
+}
