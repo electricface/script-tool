@@ -37,17 +37,23 @@ if ($grub_custom_content !~ /exec tail/){
 }
 
 
-for (@opt_add){
-	my ($menu_entry, $new_str )= get_entry_define_str($_);
-	if ( $grub_custom_content !~ /$menu_entry/ ){
-		#append;
+for my $iso_path (@opt_add){
+	my ($iso_id, $new_str )= get_entry_define_str( $iso_path );
+	if ( $grub_custom_content !~ /$iso_id/ ){
+		#append
+		say "append";
 		$grub_custom_content .= $new_str;
+	} 
+	else {
+		#replace
+		say "replace";
+		$grub_custom_content =~ s/\n*#start:$iso_id.*#end:$iso_id\n*/$new_str/s;
 	}
 };
 
 for ( @opt_delete ){
-	my $menu_entry = get_entry($_);
-	$grub_custom_content =~ s/#start:$menu_entry.*#end:$menu_entry//s
+	my $iso_id = get_entry($_);
+	$grub_custom_content =~ s/\n*#start:$iso_id.*#end:$iso_id\n*//s
 }
 
 if ( @opt_add || @opt_delete || $opt_update_grub ){
@@ -66,7 +72,7 @@ sub print_help_message {
 	print <<_EOF_;
 -a -add <iso> add iso 
 -d --delete <iso> rm iso
--u --update-grub run `grub-update` command
+-u --update-grub run `sudo update-grub` command
 -l --list list iso found in $GRUB_CUSTOM_PATH;
 -h --help show help message
 _EOF_
@@ -93,6 +99,8 @@ sub do_with_temp_file {
 	print $tempf_fh $grub_custom_content;
 	close $tempf_fh;
 	qx(sudo mv $tempf_path $GRUB_CUSTOM_PATH);
+
+	#chmod +x
 	qx(sudo chmod 0755 $GRUB_CUSTOM_PATH);
 	qx(sudo chown root:root $GRUB_CUSTOM_PATH);
 
@@ -102,6 +110,21 @@ END {
 	unlink $tempf_path;
 }
 
+
+sub get_iso_info {
+	my $iso_path = shift;
+	my @isoinfo_descript = qx(isoinfo -d -i $iso_path);
+	my $isoinfo_opt ='' ;
+	my $volume_id = '';
+	for my $line ( @isoinfo_descript ){
+		$volume_id = $1 if  ( $line =~ /Volume id:(.*)$/ );
+		$isoinfo_opt = '-J' if $line =~ m{^Joliet\b}m;
+		$isoinfo_opt = '-R' if $line =~ m{^Rock Ridge\b}m;
+	}
+
+	my @files = qx(isoinfo -i $iso_path $isoinfo_opt -f );	
+	return $volume_id, \@files; 
+}
 
 sub get_disk_and_mntpoint {
 	my $iso_path =shift;
@@ -127,28 +150,45 @@ sub get_entry {
 
 sub get_entry_define_str {
 	my $iso_path = shift;
-	my ($menu_entry,$path,$suffix) = fileparse( $iso_path, '.iso' );
-	my $cpath = canonpath( "$path/$menu_entry.iso" );
+	my ($basename,$path,$suffix) = fileparse( $iso_path, '.iso' );
+	my $cpath = canonpath( "$path/$basename.iso" );
 	if ( -f $cpath ){
-		say STDERR "Found iso $cpath";
+		say STDERR "\nFound iso $cpath";
 	} else {
 		say STDERR "Not found iso file ”$cpath“";
 		exit;
 	};
-	$menu_entry =~ s/-/ /g;
 	my ($root_disk,$mnt_point) = get_disk_and_mntpoint($cpath) ;
 	
+	my ( $volume_id , $files_ref ) = get_iso_info( $cpath );
+	my $vmlinuz_path;
+	my $initrd_path;
+	for my $f ( @$files_ref ){
+		chomp $f;
+		if ( $f =~ m{/casper/vmlinuz} ){
+			$vmlinuz_path = $f;
+		} 
+		elsif ( $f =~ m{/casper/initrd} ){
+			$initrd_path = $f;
+		}
+	}
+	say "Volume id:$volume_id\ninitrd: $initrd_path\nvmlinuz: $vmlinuz_path";
 	my $grub_path = $cpath =~ s/^$mnt_point//r;
 
-	return $menu_entry, <<_EOF_ ;
-#start:$menu_entry,path:$cpath
-menuentry "$menu_entry" {
+	if ( !defined $vmlinuz_path || !defined $initrd_path ){
+		die "can't file vmlinuz or initrd";
+	}
+
+	return $basename, <<_EOF_ ;
+
+#start:$basename,path:$cpath
+menuentry "$volume_id -- $basename" {
 	set root=$root_disk
 	insmod loopback
 	loopback lop $root_disk$grub_path
-	linux (lop)/casper/vmlinuz boot=casper iso-scan/filename=$grub_path noprompt noeject
-	initrd (lop)/casper/initrd.lz
+	linux (lop)$vmlinuz_path boot=casper iso-scan/filename=$grub_path noprompt noeject
+	initrd (lop)$initrd_path
 }
-#end:$menu_entry
+#end:$basename
 _EOF_
 }
