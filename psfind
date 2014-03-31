@@ -74,16 +74,28 @@ for ( qx(ps h -p '$pids_str' -o uid,pid,cmd) ){
 	push @items,$i;	
 }
 
+#define color
+my $selected_cur_color="\e[38;5;196;1;48;5;234m";
+my $selected_color="\e[38;5;196m";
+my $cur_color="\e[38;5;118;1;48;5;234m";
+my $end_color="\e[0m";
+
+if ( $ENV{TERM} ne "xterm" ) {
+	#in tty
+	$selected_cur_color="\033[01;31;47m";
+	$selected_color="\033[01;31m";
+	$cur_color="\033[01;34;47m";
+	$end_color="\033[00m";
+}
+
 main_loop();
 
 sub truncate_str {
 	my ($str, $cutoff , $marker) = @_;
-	my $is_trunc = 0;
 	if ( length($str) > $cutoff ){
 		$str = substr( $str, 0 , $cutoff - length($marker) ) . $marker;
-		$is_trunc = 1;
 	}
-	return $str, $is_trunc ;
+	return $str ;
 }
 
 sub change_keymap_theme {
@@ -154,34 +166,35 @@ sub process_key {
 }
 
 sub print_ui {
+	
 	my $cols = `tput cols`;
 	chomp $cols;
-	my @truncate_status;
+	my $line;
 	for ( 0 .. @items-1 ) {	
 		my $i = $items[$_];
 		my $pid = @{$i}[1];
 		my $status = $selected{$pid} // 0;
-		my ($line, $truncate_stat ) = 
-			truncate_str(join( " ", @$i ) , $cols, "►");
-		$truncate_status[$_] = $truncate_stat;
+		$line = truncate_str(join( " ", @$i ) , $cols, "►");
 		if ( $status == 1 ){
 			#selected and cur
 			if ( $_ == $cur ) {
-				say "\e[38;5;196;1;48;5;234m$line\e[0m";
+				say "$selected_cur_color$line$end_color";
 			#selected and not cur
 			} else {
-				say "\e[38;5;196m$line\e[0m";
+				say "$selected_color$line$end_color";
 
 			}
 		#not selected and cur
 		} elsif ( $_ == $cur ) {	
-			say "\e[38;5;118;1;48;5;234m$line\e[0m";
+			say "$cur_color$line$end_color";
 		#common
 		} else {
 			say $line;
 		}
 	}
-	if ( $truncate_status[$cur] ){
+
+	#if be truncated
+	if ( $line =~ /►$/ ){
 		my $cur_cmd = @{ $items[$cur] }[2];
 		say "_" x $cols . "\n$cur_cmd";
 	}
