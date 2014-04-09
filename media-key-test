@@ -1,0 +1,87 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+
+use Gtk3 -init;
+use Glib qw/TRUE FALSE/;
+my $WINDOW_ICON_FILE = "/usr/share/icons/Deepin/apps/48/preferences-keyboard.png";
+
+MAIN: {
+	my $window = Gtk3::Window->new('toplevel');
+
+	$window->set_title("Key Test Tool");
+	$window->set_position("center");
+	$window->set_default_size(400,40);
+	$window->set_border_width(5);
+	$window->signal_connect (delete_event => sub { Gtk3->main_quit; } );
+
+	#set icon on dock
+	if ( -e $WINDOW_ICON_FILE ) {
+		my $pixbuf = Gtk3::Gdk::Pixbuf->new_from_file($WINDOW_ICON_FILE);
+		$window->set_icon( $pixbuf );
+	}
+
+	my $hbox1 = Gtk3::Box->new("horizontal",5);
+	$hbox1->add_button("|<", "Previous Music" ,"XF86AudioPrev");
+	$hbox1->add_button( ">| ", "Next Music", "XF86AudioNext");
+	$hbox1->add_button("<<", "Rewind", "XF86AudioRewind");
+	$hbox1->add_button(">>", "Forward", "XF86AudioForward");
+	$hbox1->add_button("Play/Pause", "Play/Pause", "XF86AudioPlay");
+	$hbox1->add_button("Stop","Stop" ,"XF86AudioStop");
+
+	my $hbox2 = Gtk3::Box->new("horizontal",5); 
+	$hbox2->add_button("B-","Brightness Down", "XF86MonBrightnessDown");
+	$hbox2->add_button( "B+","Brightness Up" ,"XF86MonBrightnessUp");
+	$hbox2->add_button( "V-","Volume Down","XF86AudioLowerVolume");
+	$hbox2->add_button( "V+","Volume Up","XF86AudioRaiseVolume");
+
+	$hbox2->add_button( "Vx", "Toggle Audio Mute","XF86AudioMute" );
+	$hbox2->add_button( "NumLock", "Toggle NumLock","Num_Lock");
+
+
+	my $hbox3 = Gtk3::Box->new("horizontal",5); 
+	$hbox3->add_button( "Calc", "Calculator", "XF86Calculator");
+	$hbox3->add_button( "www", "Browser Web","XF86WWW");
+	$hbox3->add_button( "Mail", "Open default mail client", "XF86Mail" );
+	$hbox3->add_button( "Eject", "CDROM Eject", "XF86Eject");
+
+
+	my $vbox = Gtk3::Box->new("vertical",5);
+	$vbox->add_box($hbox1, "Music Control");
+	$vbox->add_box($hbox2, "OSD");
+	$vbox->add_box($hbox3, "Applications");
+
+
+	$window->add($vbox);
+	$window->show_all;
+	Gtk3::main;
+
+}
+
+package Gtk3::Box {
+	use Glib qw/TRUE FALSE/;
+	sub add_box {
+		my ($self,$box,$label_text) = @_;
+		$box->set_homogeneous(TRUE);
+		my $label = Gtk3::Label->new( $label_text );
+
+		$self->pack_start( $label , TRUE,TRUE, 0 );
+		$self->pack_start( $box, TRUE,TRUE, 0 );
+		
+	}
+	sub add_button {
+		my ($self, $label,$tooltips, $key_code ) = @_;
+		my $button = Gtk3::Button->new(  $label );
+		$button->set_tooltip_text( $tooltips );
+		$button->signal_connect( clicked => sub { main::press_key( $key_code) } );
+		$self->pack_start($button, TRUE,TRUE,0 );
+	}
+};
+
+
+sub press_key {
+	my $key_name = shift;
+	print("xdotool key $key_name\n");
+	system("xdotool key $key_name");
+}
+
