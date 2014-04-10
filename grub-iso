@@ -2,7 +2,7 @@
 use strict;
 use File::Basename;
 use File::Temp 'tempfile';
-use File::Spec::Functions 'canonpath';
+use File::Spec::Functions qw(canonpath rel2abs);
 use Getopt::Long qw(:config no_ignore_case);
 use File::Slurp;
 use 5.14.2;
@@ -137,6 +137,7 @@ sub get_disk_and_mntpoint {
 	my $mnt_point = $sorted_match_result[0]->[0];
 	if ($device =~ m[/dev/sd([a-z])(\d+)] ){
 		my $num = ord( $1 ) - ord( 'a');
+		say "(hd$num,msdos$2) \n mount point: $mnt_point";
 		return "(hd$num,msdos$2)",$mnt_point;
 	}
 }
@@ -152,6 +153,7 @@ sub get_entry_define_str {
 	my $iso_path = shift;
 	my ($basename,$path,$suffix) = fileparse( $iso_path, '.iso' );
 	my $cpath = canonpath( "$path/$basename.iso" );
+	$cpath = rel2abs( $cpath );
 	if ( -f $cpath ){
 		say STDERR "\nFound iso $cpath";
 	} else {
