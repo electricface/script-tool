@@ -1,0 +1,495 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use 5.14.2;
+
+use Config::Tiny;
+#use List::MoreUtils qw(any);
+use Data::Dumper;
+use Getopt::Long;
+
+my ($opt_install, $opt_help, $opt_list_project,$opt_project, $opt_resource , $opt_update_pot, $opt_stat, $opt_list_source_file, $opt_list_po_file, $opt_info, $opt_list_resource, $opt_auto );
+
+if (!exists $ENV{GIT_REPO_DIR} or $ENV{GIT_REPO_DIR} eq '' ){
+	say STDERR 'Not set the $GIT_REPO_DIR environment variables.';
+	exit 2;
+}
+my $GIT_REPO_DIR= $ENV{GIT_REPO_DIR};
+my $TRANS_DIR="$GIT_REPO_DIR/trans";
+my $cfg = Config::Tiny->new->read( "$GIT_REPO_DIR/trans/.tx/project-resource.ini" );
+my $MINIMUM_PERC=30; # pull from tx when > 30%
+Project->init($cfg);
+
+GetOptions(
+	"help" => \&print_help,
+	"list-project" => \&Project::print_project_list,
+	"update-pot" => \$opt_update_pot,
+	"stat" => \$opt_stat,
+	"list-source-file" => \$opt_list_source_file,
+	"list-po-file" => \$opt_list_po_file,
+	"info" => \$opt_info,
+	"resource=s" => \$opt_resource,
+	"list-resource" => \$opt_list_resource,
+	"project=s" => \$opt_project,
+	"auto" => \$opt_auto,
+	"install" => \&install,
+);
+
+
+# --project STRING
+if ( $opt_project ) {
+	my $proj = Project->new( $opt_project );
+	# --list-resource
+	if ( $opt_list_resource ){
+		say join " ", $proj->resources;
+	}
+
+	# --auto
+	elsif ( $opt_auto ){
+		$proj->update_po_from_transifex;
+		$proj->update_po_from_local;
+	}
+	
+	else {
+		say "wrong used --project";
+	}
+}
+
+# --resource STRING 
+if ( $opt_resource ) {
+	my $resource = Resource->new( $cfg , $opt_resource );
+
+	# --stat
+	if ( $opt_stat ) {
+		my $ref_po_stat = $resource->po_statistics;
+		print_stat( $ref_po_stat );
+	} 
+	# --update-pot
+	elsif ( $opt_update_pot ) {
+		$resource->write_pot_file('/tmp/test.pot');	
+	}
+	# --list-source-file
+	elsif ( $opt_list_source_file ){
+		my $ref_sf_list = $resource->source_file_list;
+		for (sort keys $ref_sf_list) {
+			say "xgettext option : $_";
+			for my $f ( @{ $ref_sf_list->{$_} } ){
+				say "  " . $f; 
+			}
+		}
+	}
+
+	# --list-po-file
+	elsif ( $opt_list_po_file ){
+		my $ref_po_file_list = $resource->po_file_list;
+		for ( sort keys $ref_po_file_list ){
+			say "$_  \t" . $ref_po_file_list->{$_} ;
+		}
+	} 
+
+	# --info
+	elsif ( $opt_info ){
+		#print Dumper $resource;
+		my $key_color="\e[38;5;208m";
+		for (qw( project_root git_branch pot_file ) ){
+			say "$key_color$_:\e[0;m $resource->{$_}";
+		}
+		my $po_file_filter = $resource->{data}{po_file_filter};
+		say $key_color. "po_file_filter: \e[0;m$po_file_filter";
+		for ( sort keys $resource->{data} ){
+			if ( /^source_file_regex/ ) {
+				say "$key_color$_: \e[0;m" . $resource->{data}{$_};
+			}
+		}
+		my $resource_name = $resource->{resource_name};
+		my $project_name = $resource->{project_name};
+		
+		my $url = $resource->{data}{resource_url};
+		$url =~ s/$project_name/\e[38;5;2m$project_name\e[0;m/;
+		$url =~ s/$resource_name/\e[38;5;3m$resource_name\e[0;m/;	
+		say $key_color."resource_url: \e[0;m". $url;
+	}
+	else {
+		say "wrong used --resource";
+	}
+}
+
+
+sub print_help {
+	print 
+"--help
+--install
+--list-project
+--project PROJECT_NAME
+	--list-resource
+	--auto
+--resource RESOURCE_NAME
+	--stat
+	--info
+	--list-po-file
+	--list-source-file
+";
+	exit;
+}
+
+
+package Project {
+	use List::MoreUtils qw(any);
+	my %project_list;
+	my $config;
+
+#Project->init($cfg);
+	sub init {
+		my $class;
+		( $class, $config ) = @_;
+		my @sections = keys %{ $config };
+		for ( @sections ){
+			next if $_ eq '_';
+			my ( $dir_name , $git_branch ) = split /~/;
+			$git_branch = "master" if !defined $git_branch;	
+			my $sub_module_name;
+			( $dir_name , $sub_module_name ) = split /\./, $dir_name;
+			my $project_name;
+			if ( $git_branch eq 'master' ){
+				$project_name = $dir_name;
+			} else {
+				$project_name = "$dir_name~$git_branch";
+			}
+			if ( !defined $sub_module_name ){
+				$project_list{ $project_name } = ['_'];
+			} else {
+				push @{ $project_list{ $project_name } }, $sub_module_name;
+			}
+		}
+	}
+	
+# my $project = Project->new('dde~2013');
+	sub new {	
+		my ($class, $project_name ) = @_;
+		my $git_branch = 'master';
+		my $project_dir_name = $project_name;
+		if ( $project_name =~ /(.*)~(.*)/ ){
+			$project_dir_name = $1;
+			$git_branch = $2;	
+		}
+
+		my @resources;
+		if ( !exists $project_list{$project_name} ){
+			say STDERR "project `$project_name` undefined.";
+			exit;
+		} else {
+			my $ref_project = $project_list{$project_name};
+			my $count = scalar values $ref_project;
+			my $type;
+			if ( $count  == 1 && $ref_project->[0] eq '_' ) {
+				#Single;
+				$type = 's';	
+				push @resources , Resource->new( $config, $project_name );
+			} else {
+				#Multiple
+				$type = 'm';	
+				for (values $ref_project ){
+					push @resources , Resource->new( $config, $project_name.'.'.$_ );
+				}
+			};
+			return bless { 
+				name => $project_name ,
+				git_branch => $git_branch,	
+				dir_name => $project_dir_name,
+				data => $ref_project ,
+				resource_objs => \@resources,
+				count => $count ,
+				type => $type ,
+			} , $class;
+		}
+	}
+
+	sub update_po_from_local {
+		my $self = shift;
+		my $local_trans_dir = "$TRANS_DIR/$self->{dir_name}";
+		my $git_repo_dir = "$GIT_REPO_DIR/$self->{dir_name}";
+		my $cmd = "rsync -rtpv --exclude='en.po' --exclude='*zh_CN*' --exclude='messages.mo' ".
+			"--exclude='*.pot' --exclude='*.sw?' $local_trans_dir/ $git_repo_dir";
+		my %po_regex_list;	
+		for my $r ( @{ $self->{resource_objs} } ){
+			my $po_file_regex = $r->{data}{po_file_filter};
+			$po_file_regex =~ s/<lang>/([A-Za-z_]+)/;
+			$po_file_regex =~ s(<project_root>/)();
+			$po_regex_list{ $po_file_regex } = $r->{full_name};
+		}
+		say "\e[38;5;160mupdate po from `$TRANS_DIR`\e[0;m";
+		open my $cmd_output, "$cmd|";
+
+		my $cur_regex ='';
+		my $cur_resource;
+		my $lang = '';
+		my $change_flag;
+		my $match_flag;
+		my $match_count=0;
+		for my $line ( <$cmd_output> ){
+			chomp $line;
+			if ( $line =~ /^$cur_regex$/ ){
+				$lang = $1;
+				$change_flag = 0;
+				$match_flag = 1;
+			} else {
+				$match_flag = 0;
+				for my $rx ( keys %po_regex_list ){	
+					if ( $line =~ /^$rx$/ ){
+						$match_flag = 1;
+						$match_count++;
+						$cur_resource = $po_regex_list{$rx};
+						$cur_regex = $rx; 
+						delete $po_regex_list{$rx};
+						$change_flag = 1;
+						last;
+					}
+
+				}
+
+			}
+			my $nl='';
+			$nl= "\n" if $match_count != 1;
+			print "$nl$match_count. \e[38;5;3m[$cur_resource]\e[0;m\n" if  $change_flag;
+			print $lang . " " if defined $lang && $lang ne '' && $match_flag == 1;
+		}
+		close $cmd_output;
+	}
+
+	sub update_po_from_transifex {
+		my $self = shift;
+		chdir $TRANS_DIR or die $!;
+		my $ids = join ",", $self->tx_resource_ids;
+		my $cmd = "tx pull -f -r '$ids' -a --minimum-perc=$MINIMUM_PERC";
+		print "\e[38;5;160mpull po from transifex\e[0;m";
+		system $cmd .q{|perl -n -e '
+			use 5.12.4;
+			my $oldfh = select STDOUT;
+			$|=1;
+			select $oldfh;
+			chomp;
+			if ( /Pulling translations for resource\s*(\S+)\s*\(source:\s*(.*\.pot)\)/) {
+				my ($resource, $pot_file ) = ($1,$2);
+				say "\n\e[38;5;6mPull $resource\e[0;m";
+				say STDERR "pot file `$pot_file` not exists." unless -f $pot_file;
+			} elsif ( /->\s*(.+):\s*.+\.po/ ){
+				print "$1 ";
+			} elsif ( /Done\./ ){
+				print "\n";
+			}'
+		}
+	}
+
+	sub tx_resource_ids {
+		my $self= shift;
+		my @tx_resource_ids;
+		my $ref_resources = $self->{resource_objs};
+		for my $r ( @$ref_resources ){ 
+			my $resource_id = $r->{project_name} .'.'. $r->{resource_name};
+			push @tx_resource_ids, $resource_id; 
+		}
+		return @tx_resource_ids;
+	}
+
+	sub resources {
+		my $self = shift;
+		if ($self->{type} eq 's'){
+			return  ( $self->{name} );		
+		} else {
+			return map { "$self->{name}.$_" } values $self->{data};
+		}
+	}
+
+	sub print_project_list {
+		for my $dir (sort keys %project_list ){
+			print $dir;
+			my $proj = new( __PACKAGE__ ,$dir);
+			if ( $proj->{type} eq 's' ) {
+				print "\n";
+				next;
+			}
+			say " { " . join( ", ", values $proj->{data} ) . " }  ($proj->{count})";
+		}
+		exit;
+	}
+
+}
+
+package Resource {
+	use List::MoreUtils qw(any);
+	sub new {
+		my ( $class, $config, $section ) = @_;
+		if ( !exists $config->{$section} ) {
+			say STDERR "resource `$section` undefined.";
+			exit 2;
+		}
+		my ( $dir_name , $git_branch ) = split /~/ , $section;
+		$git_branch = "master" if !defined $git_branch;
+		my $full_name = $dir_name;
+		($dir_name ) = split /\./, $dir_name;
+		
+		my $url = $config->{$section}{resource_url};
+		my ($project_name, $resource_name);
+		if ( $url =~ m{^https://www.transifex.com/projects/p/([^/]+)/resource/([^/]+)/$} ){
+			($project_name, $resource_name) = ($1,$2);
+		}
+
+
+		my $project_root = "$GIT_REPO_DIR/$dir_name",
+		my $pot_file = $config->{$section}{pot_file};
+		$pot_file =~ s/<project_root>/$project_root/;
+
+		my $po_file_regex = $config->{$section}{po_file_filter};
+		$po_file_regex =~ s/<project_root>/$project_root/;
+		$po_file_regex =~ s/<lang>/([A-Za-z_]+)/;
+
+		return bless { 
+			data => $config->{$section} ,
+			dir_name => $dir_name,
+			full_name => $full_name,
+			pot_file => $pot_file,
+			project_name => $project_name,
+			project_root => $project_root,
+			resource_name => $resource_name,
+			po_file_regex => $po_file_regex,
+		} ,$class;
+	}
+
+
+	sub update_tx_config {
+		my ($self, $tx_cfg) = @_;
+		my $section = $self->{project_name} . '.' . $self->{resource_name};
+		$tx_cfg->{$section}{source_lang} = 'en';
+		$tx_cfg->{$section}{type} = 'PO';
+		
+		my $source_file = $self->{data}{pot_file};
+		my $dir = $self->{dir_name};
+		$source_file =~ s/<project_root>/$dir/;
+		$tx_cfg->{$section}{source_file} = $source_file;
+
+		my $file_filter = $self->{data}->{po_file_filter};
+		$file_filter =~ s/<project_root>/$dir/;
+		$tx_cfg->{$section}{file_filter} = $file_filter; 
+	}
+
+	sub write_pot_file {
+		my ($self, $pot_file ) = @_;
+
+		$pot_file = $self->{pot_file} if !defined $pot_file;
+		my $sf_list = $self->source_file_list;
+		say "write pot file : `$pot_file`";
+
+		#clear pot file
+		qx(> $pot_file);
+		for my $option ( sort keys %$sf_list ){	
+			open my $xgettext , "|xgettext $option --no-location --from-code=utf-8 -s -j -f - -o $pot_file"
+				or die "error $!";
+			for my $f ( @{ $$sf_list{$option} } ) {
+					say $xgettext $f;
+			}
+			close $xgettext
+		}
+	}
+
+	sub source_file_list {
+		my $self = shift;
+		my @keys = keys $self->{data};
+
+		my $project_root = $self->{project_root};
+		my @file_list = qx(find $project_root );
+		@file_list = map { chomp $_; $_ } @file_list;
+
+		my %regex_list;
+		@keys = grep { /^source_file_regex(|\[.*\])$/ } @keys;
+
+		for ( @keys ){
+			my $option;
+			if ( /^source_file_regex\[[^:]*:(.*)\]$/ ){
+				$option = $1;
+			} else {
+				$option = "-k_";
+			}
+			my $regex = $self->{data}{$_};
+			$regex =~ s/<project_root>/$project_root/;
+			push @{ $regex_list{$option} }, $regex;
+		}
+	
+		my %source_file_list;
+		for my $option (sort keys %regex_list ){
+			for my $f ( @file_list ){
+				my $ref_regexs = $regex_list{$option};
+				if ( any { $f =~ /$_/ } @$ref_regexs ){
+					push @{ $source_file_list{$option} } , $f;
+				}
+			}
+			
+		}
+		return \%source_file_list;
+	}
+
+	sub po_statistics {
+		my $self = shift;
+		my $ref_po_files = $self->po_file_list;
+		my %po_stat;
+		for ( sort keys %{ $ref_po_files } ){
+			my ($lang,$file) = ($_ , $$ref_po_files{$_} );
+			my $msgstat = qx(LC_ALL=C msgfmt --statistics -o /dev/null $file 2>&1);
+			if ( $msgstat =~ /(\d+)\D+(\d+)?/ ) {
+				my ( $trans, $untrans ) = ( $1, $2 );
+				$untrans = defined $untrans ? $untrans : 0;
+				$po_stat{$lang} = [ $trans, $untrans ];
+			}
+		}
+		return \%po_stat;
+	}
+
+	sub po_file_list {	
+		my $self = shift;
+		my %po_files;
+		my $po_file_regex = $self->{po_file_regex};
+		my $project_root = $self->{project_root};
+		my @files = qx(find $project_root -name "*.po");
+		my %po_stat;
+		for ( @files ) {
+			chomp;
+			if ( /^$po_file_regex$/ ){
+				my ($lang,$file) = ($1,$_);
+				$po_files{$lang} = $file;
+			}
+		}
+
+		return \%po_files;
+	}
+}
+
+sub print_stat {
+	my $ref_po_stat = shift;
+	my $n =0;
+	for my $lang ( sort keys %{ $ref_po_stat } ){
+		my $ref_arr = $$ref_po_stat{$lang};
+		my $trans = $ref_arr->[0]; 
+		my $untrans =  $ref_arr->[1];
+		my $total = $trans + $untrans;
+		my $per  = $trans / $total; 
+		$per = sprintf '%.1f', 100 * $per;
+		$n++;
+		print "\e[38;5;136;1m$lang\t\e[38;5;118;2m$trans/$total\t\e[38;5;123;2m$per%\t\e[0m";
+		print "\n" if $n % 2 == 0; 
+	}
+	print "\n" if $n % 2;
+}
+
+sub warn_no_complete_language {
+	my ($ref_po_stat , $lang )= @_;
+	my $lang_stat = $$ref_po_stat{$lang};
+	#untrans > 0
+	if ( $$lang_stat[1] > 0 ){
+		qx(zenity --warning --text='Language "$lang" not completely translated');
+	}
+}
+
+sub install {
+    my $cmd = "sudo apt-get install -y transifex-client ";
+	say '$ '. $cmd;
+	system $cmd;
+}
