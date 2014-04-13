@@ -4,13 +4,12 @@ use warnings;
 use 5.14.2;
 
 use Config::Tiny;
-#use List::MoreUtils qw(any);
 use Data::Dumper;
 use Getopt::Long;
 
 my ($opt_install, $opt_help, $opt_list_project,$opt_project, $opt_resource , $opt_update_pot, $opt_stat, $opt_list_source_file, $opt_list_po_file, $opt_info, $opt_list_resource, $opt_auto );
 
-if (!exists $ENV{GIT_REPO_DIR} or $ENV{GIT_REPO_DIR} eq '' ){
+if (!exists $ENV{GIT_REPO_DIR} || $ENV{GIT_REPO_DIR} eq '' ){
 	say STDERR 'Not set the $GIT_REPO_DIR environment variables.';
 	exit 2;
 }
@@ -134,7 +133,6 @@ sub print_help {
 
 
 package Project {
-	use List::MoreUtils qw(any);
 	my %project_list;
 	my $config;
 
@@ -260,7 +258,7 @@ package Project {
 		my $self = shift;
 		chdir $TRANS_DIR or die $!;
 		my $ids = join ",", $self->tx_resource_ids;
-		my $cmd = "tx pull -f -r '$ids' -a --minimum-perc=$MINIMUM_PERC";
+		my $cmd = "tx pull -r '$ids' -a --minimum-perc=$MINIMUM_PERC";
 		print "\e[38;5;160mpull po from transifex\e[0;m";
 		system $cmd .q{|perl -n -e '
 			use 5.12.4;
