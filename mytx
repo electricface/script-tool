@@ -15,7 +15,9 @@ if (!exists $ENV{GIT_REPO_DIR} || $ENV{GIT_REPO_DIR} eq '' ){
 }
 my $GIT_REPO_DIR= $ENV{GIT_REPO_DIR};
 my $TRANS_DIR="$GIT_REPO_DIR/trans";
-my $cfg = Config::Tiny->new->read( "$GIT_REPO_DIR/trans/.tx/project-resource.ini" );
+my $GITHUB_ACCOUNT='electricface';
+my $PROJECT_RESOURCE_CONFIG_FILE = "$GIT_REPO_DIR/trans/.tx/project-resource.ini";
+my $cfg = Config::Tiny->new->read( $PROJECT_RESOURCE_CONFIG_FILE );
 my $MINIMUM_PERC=30; # pull from tx when > 30%
 Project->init($cfg);
 
@@ -40,15 +42,26 @@ if ( $opt_project ) {
 	my $proj = Project->new( $opt_project );
 	# --list-resource
 	if ( $opt_list_resource ){
-		say join " ", $proj->resources;
+		say for $proj->resources;
 	}
 
 	# --auto
 	elsif ( $opt_auto ){
+		$proj->git_pull_from_linuxdeepin;
 		$proj->update_po_from_transifex;
 		$proj->update_po_from_local;
+		for my $r ( @{ $proj->{resource_objs} } ){
+			$r->update_pot_file;	
+			$r->merge_po_with_pot;
+			$r->update_locale_config_ini;
+			$r->generate_mo;
+		}
+
 	}
-	
+	elsif ( $opt_info ){
+		print Dumper $proj;
+	}
+
 	else {
 		say "wrong used --project";
 	}
@@ -80,7 +93,7 @@ if ( $opt_resource ) {
 
 	# --list-po-file
 	elsif ( $opt_list_po_file ){
-		my $ref_po_file_list = $resource->po_file_list;
+		my $ref_po_file_list = $resource->{lang_po_list};
 		for ( sort keys $ref_po_file_list ){
 			say "$_  \t" . $ref_po_file_list->{$_} ;
 		}
@@ -88,9 +101,9 @@ if ( $opt_resource ) {
 
 	# --info
 	elsif ( $opt_info ){
-		#print Dumper $resource;
+		print Dumper $resource;
 		my $key_color="\e[38;5;208m";
-		for (qw( project_root git_branch pot_file ) ){
+		for (qw( project_root pot_file ) ){
 			say "$key_color$_:\e[0;m $resource->{$_}";
 		}
 		my $po_file_filter = $resource->{data}{po_file_filter};
@@ -107,6 +120,7 @@ if ( $opt_resource ) {
 		$url =~ s/$project_name/\e[38;5;2m$project_name\e[0;m/;
 		$url =~ s/$resource_name/\e[38;5;3m$resource_name\e[0;m/;	
 		say $key_color."resource_url: \e[0;m". $url;
+
 	}
 	else {
 		say "wrong used --resource";
@@ -142,7 +156,7 @@ package Project {
 		( $class, $config ) = @_;
 		my @sections = keys %{ $config };
 		for ( @sections ){
-			next if $_ eq '_';
+			next if $_ =~ /^_/;
 			my ( $dir_name , $git_branch ) = split /~/;
 			$git_branch = "master" if !defined $git_branch;	
 			my $sub_module_name;
@@ -215,7 +229,7 @@ package Project {
 			$po_file_regex =~ s(<project_root>/)();
 			$po_regex_list{ $po_file_regex } = $r->{full_name};
 		}
-		say "\e[38;5;160mupdate po from `$TRANS_DIR`\e[0;m";
+		say "\e[38;5;207mupdate po from `$TRANS_DIR`\e[0;m";
 		open my $cmd_output, "$cmd|";
 
 		my $cur_regex ='';
@@ -259,7 +273,7 @@ package Project {
 		chdir $TRANS_DIR or die $!;
 		my $ids = join ",", $self->tx_resource_ids;
 		my $cmd = "tx pull -r '$ids' -a --minimum-perc=$MINIMUM_PERC";
-		print "\e[38;5;160mpull po from transifex\e[0;m";
+		print "\e[38;5;207mpull po from transifex\e[0;m";
 		system $cmd .q{|perl -n -e '
 			use 5.12.4;
 			my $oldfh = select STDOUT;
@@ -275,6 +289,37 @@ package Project {
 			} elsif ( /Done\./ ){
 				print "\n";
 			}'
+		}
+	}
+	
+	sub git_pull_from_linuxdeepin {
+		my $self = shift;
+		my $dir_name = $self->{dir_name};
+		my $proj_path = $GIT_REPO_DIR .'/'. $dir_name;
+		chdir $proj_path or die $!;
+		my $git_cfg = Config::Tiny->new->read("$proj_path/.git/config");
+		my $origin  = $git_cfg->{'remote "origin"'}->{url};
+		if ( $origin !~ m{github.com:$GITHUB_ACCOUNT/} ) {
+			say "Bad remote orgin url";
+			exit;
+		}
+		my $deepin_remote = $config->{'_git'}{$dir_name};
+
+		#like https://github.com/linuxdeepin/deepin-screenshot.git
+		if ( $deepin_remote =~ m{^https://github.com/linuxdeepin/.*\.git} ){
+			$deepin_remote =~ s{^https://github.com/}(git\@github.com:);
+		} else {
+			say "bad config in file `$PROJECT_RESOURCE_CONFIG_FILE` section [-git] $dir_name";
+			exit;
+		};
+		my $git_branch = $self->{git_branch};
+		system "git stash";
+		system "git stash clear";
+		say "\$ git pull $deepin_remote $git_branch";
+		system "git pull $deepin_remote $git_branch";
+		if ($?) {
+			say "git pull on error";
+			exit;
 		}
 	}
 
@@ -299,15 +344,7 @@ package Project {
 	}
 
 	sub print_project_list {
-		for my $dir (sort keys %project_list ){
-			print $dir;
-			my $proj = new( __PACKAGE__ ,$dir);
-			if ( $proj->{type} eq 's' ) {
-				print "\n";
-				next;
-			}
-			say " { " . join( ", ", values $proj->{data} ) . " }  ($proj->{count})";
-		}
+		say for sort keys %project_list;
 		exit;
 	}
 
@@ -315,6 +352,8 @@ package Project {
 
 package Resource {
 	use List::MoreUtils qw(any);
+	use File::Basename qw(dirname);
+	use Config::Tiny;
 	sub new {
 		my ( $class, $config, $section ) = @_;
 		if ( !exists $config->{$section} ) {
@@ -337,9 +376,24 @@ package Resource {
 		my $pot_file = $config->{$section}{pot_file};
 		$pot_file =~ s/<project_root>/$project_root/;
 
-		my $po_file_regex = $config->{$section}{po_file_filter};
-		$po_file_regex =~ s/<project_root>/$project_root/;
+		my $po_file_filter = $config->{$section}{po_file_filter};
+		( my $po_file_regex = $po_file_filter ) =~ s/<project_root>/$project_root/;
 		$po_file_regex =~ s/<lang>/([A-Za-z_]+)/;
+
+		my $po_dir = ( split /<lang>/ , $po_file_filter )[0];
+		$po_dir = dirname($po_dir);
+		$po_dir =~ s/<project_root>/$project_root/;
+
+		my @po_files = qx(find $po_dir -iname "*.po" );
+		my %lang_po_list;
+
+		for ( @po_files ) {
+			chomp;
+			if ( /^$po_file_regex$/ ){
+				my ($lang,$file) = ($1,$_);
+				$lang_po_list{$lang} = $file;
+			}
+		}
 
 		return bless { 
 			data => $config->{$section} ,
@@ -350,10 +404,12 @@ package Resource {
 			project_root => $project_root,
 			resource_name => $resource_name,
 			po_file_regex => $po_file_regex,
+			po_dir => $po_dir,
+			lang_po_list => \%lang_po_list,
 		} ,$class;
 	}
 
-
+#resource->update_tx_config
 	sub update_tx_config {
 		my ($self, $tx_cfg) = @_;
 		my $section = $self->{project_name} . '.' . $self->{resource_name};
@@ -370,17 +426,31 @@ package Resource {
 		$tx_cfg->{$section}{file_filter} = $file_filter; 
 	}
 
-	sub write_pot_file {
-		my ($self, $pot_file ) = @_;
 
-		$pot_file = $self->{pot_file} if !defined $pot_file;
+#resource->merge_po_with_pot
+	sub merge_po_with_pot {
+		my $self = shift;
+		my @po_files = values $self->{lang_po_list};
+		my $pot = $self->{pot_file};
+		for my $po (@po_files){
+			say "msgmerge -s -U  '$po' '$pot' ";			
+			qx(msgmerge -s -U  '$po' '$pot' 2>/dev/null );			
+		}
+		
+	}
+
+#resource->update_pot_file
+	sub update_pot_file {
+
+ 		my $self = shift;
+		my $pot_file = $self->{pot_file};
 		my $sf_list = $self->source_file_list;
 		say "write pot file : `$pot_file`";
 
-		#clear pot file
-		qx(> $pot_file);
+		#backup pot file
+		qx(mv $pot_file $pot_file.save ; touch $pot_file);
 		for my $option ( sort keys %$sf_list ){	
-			open my $xgettext , "|xgettext $option --no-location --from-code=utf-8 -s -j -f - -o $pot_file"
+			open my $xgettext , "|xgettext $option --no-location --from-code=utf-8 -s -j -f - -o $pot_file 2>/dev/null"
 				or die "error $!";
 			for my $f ( @{ $$sf_list{$option} } ) {
 					say $xgettext $f;
@@ -389,6 +459,58 @@ package Resource {
 		}
 	}
 
+
+#resource->update_locale_config_ini
+	sub update_locale_config_ini {
+		my $self = shift;
+
+		my $locale_config_file = $self->{data}{locale_config};
+
+		if ( defined $locale_config_file ){
+			$locale_config_file =~ s/<project_root>/$self->{project_root}/;
+			if ( ! -f $locale_config_file ) {
+				say "Not found 'tools/locale_config.ini' file";
+				return;
+			}
+		} else {
+			say "update_locale_config_ini : resource not defined locale_config key";
+			return;
+		}
+
+		my $locale_cfg = Config::Tiny->new->read($locale_config_file);
+		my @langs = map { "\"$_\"" } keys $self->{lang_po_list};
+		if ( @langs ) {
+			$locale_cfg->{locale}{langs} = "[" . ( join ',', sort @langs ) . "]";
+			$locale_cfg->write($locale_config_file);
+		}
+
+	}
+
+
+#resource->generate_mo
+	sub generate_mo {
+		my $self = shift;
+		my $generate_mo_script = "generate_mo.py";
+		my $locale_config_file = $self->{data}{locale_config};
+		if ( defined $locale_config_file ) {
+			$locale_config_file =~ s/<project_root>/$self->{project_root}/;	
+			if ( ! -f $locale_config_file ) {
+				say "Not found 'tools/locale_config.ini' file";
+				return;
+			}
+		} else { 
+			say "generate_mo : resource not defined locale_config key";
+			return; 
+		}
+
+		my $tools_dir = dirname $locale_config_file;
+		if ( -x -f "$tools_dir/$generate_mo_script" ) {
+			chdir $tools_dir;
+			system "./$generate_mo_script";
+		}
+	}
+
+#resource->generate_mo
 	sub source_file_list {
 		my $self = shift;
 		my @keys = keys $self->{data};
@@ -427,7 +549,7 @@ package Resource {
 
 	sub po_statistics {
 		my $self = shift;
-		my $ref_po_files = $self->po_file_list;
+		my $ref_po_files = $self->{lang_po_list};
 		my %po_stat;
 		for ( sort keys %{ $ref_po_files } ){
 			my ($lang,$file) = ($_ , $$ref_po_files{$_} );
@@ -441,23 +563,6 @@ package Resource {
 		return \%po_stat;
 	}
 
-	sub po_file_list {	
-		my $self = shift;
-		my %po_files;
-		my $po_file_regex = $self->{po_file_regex};
-		my $project_root = $self->{project_root};
-		my @files = qx(find $project_root -name "*.po");
-		my %po_stat;
-		for ( @files ) {
-			chomp;
-			if ( /^$po_file_regex$/ ){
-				my ($lang,$file) = ($1,$_);
-				$po_files{$lang} = $file;
-			}
-		}
-
-		return \%po_files;
-	}
 }
 
 sub print_stat {
@@ -471,23 +576,14 @@ sub print_stat {
 		my $per  = $trans / $total; 
 		$per = sprintf '%.1f', 100 * $per;
 		$n++;
-		print "\e[38;5;136;1m$lang\t\e[38;5;118;2m$trans/$total\t\e[38;5;123;2m$per%\t\e[0m";
+		print "\e[38;5;136;1m$lang\t\e[38;5;118;2m$trans/$untrans\t\e[38;5;123;2m$per%\t\e[0m";
 		print "\n" if $n % 2 == 0; 
 	}
 	print "\n" if $n % 2;
 }
 
-sub warn_no_complete_language {
-	my ($ref_po_stat , $lang )= @_;
-	my $lang_stat = $$ref_po_stat{$lang};
-	#untrans > 0
-	if ( $$lang_stat[1] > 0 ){
-		qx(zenity --warning --text='Language "$lang" not completely translated');
-	}
-}
-
 sub install {
-    my $cmd = "sudo apt-get install -y transifex-client ";
+    my $cmd = "sudo apt-get install -y git transifex-client ";
 	say '$ '. $cmd;
 	system $cmd;
 }
