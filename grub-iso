@@ -165,6 +165,7 @@ sub get_entry_define_str {
 	my ( $volume_id , $files_ref ) = get_iso_info( $cpath );
 	my $vmlinuz_path;
 	my $initrd_path;
+	my $seed_path;
 	for my $f ( @$files_ref ){
 		chomp $f;
 		if ( $f =~ m{/casper/vmlinuz} ){
@@ -173,8 +174,14 @@ sub get_entry_define_str {
 		elsif ( $f =~ m{/casper/initrd} ){
 			$initrd_path = $f;
 		}
+		elsif ( $f =~ m{/preseed/.*\.seed} ){
+			$seed_path = $f;
+		}
 	}
-	say "Volume id:$volume_id\ninitrd: $initrd_path\nvmlinuz: $vmlinuz_path";
+	say "Volume id:$volume_id
+initrd: $initrd_path
+vmlinuz: $vmlinuz_path
+seed: $seed_path";
 	my $grub_path = $cpath =~ s/^$mnt_point//r;
 
 	if ( !defined $vmlinuz_path || !defined $initrd_path ){
@@ -187,9 +194,9 @@ sub get_entry_define_str {
 menuentry "$volume_id -- $basename" {
 	set root=$root_disk
 	insmod loopback
-	loopback lop $root_disk$grub_path
-	linux (lop)$vmlinuz_path boot=casper iso-scan/filename=$grub_path noprompt noeject
-	initrd (lop)$initrd_path
+	loopback loop $root_disk$grub_path
+	linux (loop)$vmlinuz_path file=(loop)$seed_path boot=casper iso-scan/filename=$grub_path noprompt noeject
+	initrd (loop)$initrd_path
 }
 #end:$basename
 _EOF_
