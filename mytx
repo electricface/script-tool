@@ -7,7 +7,7 @@ use Config::Tiny;
 use Data::Dumper;
 use Getopt::Long;
 
-my ($opt_install, $opt_help, $opt_list_project,$opt_project, $opt_resource , $opt_update_pot, $opt_stat, $opt_list_source_file, $opt_list_po_file, $opt_info, $opt_list_resource, $opt_auto );
+my ($opt_update_tx_config,$opt_commit, $opt_push_lang, $opt_dump, $opt_stash_clear, $opt_help, $opt_list_project,$opt_project, $opt_resource , $opt_push_pot, $opt_stat, $opt_list_source_file, $opt_list_po_file, $opt_info, $opt_list_resource, $opt_auto );
 
 if (!exists $ENV{GIT_REPO_DIR} || $ENV{GIT_REPO_DIR} eq '' ){
 	say STDERR 'Not set the $GIT_REPO_DIR environment variables.';
@@ -16,24 +16,32 @@ if (!exists $ENV{GIT_REPO_DIR} || $ENV{GIT_REPO_DIR} eq '' ){
 my $GIT_REPO_DIR= $ENV{GIT_REPO_DIR};
 my $TRANS_DIR="$GIT_REPO_DIR/trans";
 my $GITHUB_ACCOUNT='electricface';
-my $PROJECT_RESOURCE_CONFIG_FILE = "$GIT_REPO_DIR/trans/.tx/project-resource.ini";
+my $PROJECT_RESOURCE_CONFIG_FILE = "$TRANS_DIR/.tx/project-resource.ini";
+my $TX_CONFIG_FILE = "$TRANS_DIR/.tx/config";
 my $cfg = Config::Tiny->new->read( $PROJECT_RESOURCE_CONFIG_FILE );
+my $tx_config = Config::Tiny->new->read( $TX_CONFIG_FILE );
 my $MINIMUM_PERC=30; # pull from tx when > 30%
+my @COMMIT_FILE_EXTENSIONS = qw(po pot ini desktop);
 Project->init($cfg);
 
 GetOptions(
 	"help" => \&print_help,
 	"list-project" => \&Project::print_project_list,
-	"update-pot" => \$opt_update_pot,
 	"stat" => \$opt_stat,
 	"list-source-file" => \$opt_list_source_file,
 	"list-po-file" => \$opt_list_po_file,
 	"info" => \$opt_info,
+	"dump" => \$opt_dump,
 	"resource=s" => \$opt_resource,
 	"list-resource" => \$opt_list_resource,
 	"project=s" => \$opt_project,
+	"push-pot" => \$opt_push_pot,
+	"push-lang=s" => \$opt_push_lang,
 	"auto" => \$opt_auto,
 	"install" => \&install,
+	"stash-clear" => \$opt_stash_clear,
+	"commit" => \$opt_commit,
+	"update-tx-config" => \&Project::update_tx_config,
 );
 
 
@@ -55,13 +63,33 @@ if ( $opt_project ) {
 			$r->merge_po_with_pot;
 			$r->update_locale_config_ini;
 			$r->generate_mo;
+			$r->push_pot;
 		}
 
 	}
-	elsif ( $opt_info ){
-		print Dumper $proj;
+
+# 	--commit
+	elsif ( $opt_commit ){
+		$proj->commit;
 	}
 
+# 	--push-pot
+	elsif ( $opt_push_pot ){
+		for my $r ( @{ $proj->{resource_objs} } ){
+			$r->push_pot;
+		}
+	}
+
+	# --dump
+	elsif ( $opt_dump ){
+		print Dumper $proj;
+	}
+		
+	
+#	--stash-clear
+	elsif ( $opt_stash_clear ) {
+		$proj->empty_all_changes;
+	}
 	else {
 		say "wrong used --project";
 	}
@@ -76,10 +104,18 @@ if ( $opt_resource ) {
 		my $ref_po_stat = $resource->po_statistics;
 		print_stat( $ref_po_stat );
 	} 
-	# --update-pot
-	elsif ( $opt_update_pot ) {
-		$resource->write_pot_file('/tmp/test.pot');	
+
+#	--push-pot
+	elsif ( $opt_push_pot ) {
+		$resource->push_pot;	
 	}
+
+#	--push-lang zh-TW
+	elsif ( $opt_push_lang ){
+		$resource->push_lang( $opt_push_lang );
+	}
+
+
 	# --list-source-file
 	elsif ( $opt_list_source_file ){
 		my $ref_sf_list = $resource->source_file_list;
@@ -101,7 +137,6 @@ if ( $opt_resource ) {
 
 	# --info
 	elsif ( $opt_info ){
-		print Dumper $resource;
 		my $key_color="\e[38;5;208m";
 		for (qw( project_root pot_file ) ){
 			say "$key_color$_:\e[0;m $resource->{$_}";
@@ -122,6 +157,12 @@ if ( $opt_resource ) {
 		say $key_color."resource_url: \e[0;m". $url;
 
 	}
+
+#	--dump 
+	elsif ( $opt_dump ){
+		print Dumper $resource;
+	}
+
 	else {
 		say "wrong used --resource";
 	}
@@ -136,21 +177,26 @@ sub print_help {
 --project PROJECT_NAME
 	--list-resource
 	--auto
+	--commit
+	--dump
 --resource RESOURCE_NAME
 	--stat
 	--info
+	--dump
 	--list-po-file
 	--list-source-file
+	--push-lang LANG
 ";
 	exit;
 }
 
 
 package Project {
+use List::MoreUtils qw(any);
 	my %project_list;
 	my $config;
 
-#Project->init($cfg);
+#  Project->init($cfg);
 	sub init {
 		my $class;
 		( $class, $config ) = @_;
@@ -216,6 +262,55 @@ package Project {
 		}
 	}
 
+# project->commit
+	sub commit {
+		my $self = shift;
+		my $dir_name = $self->{dir_name};
+		my $proj_path = $GIT_REPO_DIR .'/'. $dir_name;
+		chdir $proj_path or die "can chdir $!";
+
+		for my $ext (@COMMIT_FILE_EXTENSIONS) {
+			system "git add *.$ext";
+		}
+		my @git_status = qx(git status -s);
+		my @file_changes_info;
+		my %change;
+		for my $s (@git_status) {
+			if ($s =~ /^(A|M|D).*\.(\w+)$/) {
+				my $mod_flag = $1;
+				my $file_ext = $2;
+				if ( any { $_ eq $file_ext } @COMMIT_FILE_EXTENSIONS ){
+					$change{"$mod_flag: $file_ext"}++ ;
+					push @file_changes_info, $s;
+				}
+			}
+		}
+		my $commit_str = '';
+		for ( keys %change ) {
+			$commit_str .= "$_($change{$_}); ";
+		}
+		my $file_changes = "[ File Changes ]\n" . ( join '',sort @file_changes_info );
+		print $file_changes . "\n";
+		print "[ Changes Count ] ".$commit_str . "\n";
+		my $prompt = "\nInput some commit message:";
+		print $prompt;
+		my $input = <STDIN> ;
+		chomp $input;
+		if ( $input =~ /^ok\s+(.+)/ ) {
+			$commit_str = "$1  $commit_str";
+			say "\$ git commit -m \'$commit_str\'";
+			system "git commit -m '$commit_str' ";
+			say "\$ git push";
+			system "git push";
+		}	
+		else {
+			say "Cancel\n\$ git reset HEAD *";
+			qx"git reset HEAD *";
+			exit;
+		}
+
+	}
+
 	sub update_po_from_local {
 		my $self = shift;
 		my $local_trans_dir = "$TRANS_DIR/$self->{dir_name}";
@@ -268,6 +363,8 @@ package Project {
 		close $cmd_output;
 	}
 
+
+#project->update_po_from_transifex
 	sub update_po_from_transifex {
 		my $self = shift;
 		chdir $TRANS_DIR or die $!;
@@ -292,6 +389,22 @@ package Project {
 		}
 	}
 	
+#project->empty_all_changes
+	sub empty_all_changes {
+		my $self = shift;
+		my $dir_name = $self->{dir_name};
+		my $proj_path = $GIT_REPO_DIR .'/'. $dir_name;
+			
+		chdir $proj_path or die $!;
+		system "git stash";
+		system "git stash clear";
+
+		print "Empty all the changes in project \"$dir_name\".\n";
+
+	}
+	
+
+#project->git_pull_from_linuxdeepin
 	sub git_pull_from_linuxdeepin {
 		my $self = shift;
 		my $dir_name = $self->{dir_name};
@@ -313,8 +426,8 @@ package Project {
 			exit;
 		};
 		my $git_branch = $self->{git_branch};
-		system "git stash";
-		system "git stash clear";
+		print "Remove untracked files from the working tree.\n";
+		system "git clean -fd ; git stash && git stash clear";
 		say "\$ git pull $deepin_remote $git_branch";
 		system "git pull $deepin_remote $git_branch";
 		if ($?) {
@@ -337,7 +450,8 @@ package Project {
 	sub resources {
 		my $self = shift;
 		if ($self->{type} eq 's'){
-			return  ( $self->{name} );		
+			my $resource_name = $self->{resource_objs}[0]{resource_name};
+			return  ( "$self->{name}.$resource_name" );		
 		} else {
 			return map { "$self->{name}.$_" } values $self->{data};
 		}
@@ -347,6 +461,20 @@ package Project {
 		say for sort keys %project_list;
 		exit;
 	}
+	#	--update-tx-config
+
+	sub update_tx_config {
+		for my $p (keys %project_list ){
+			my $proj = Project->new($p);
+			for my $r ( @{ $proj->{resource_objs} } ){
+				$r->update_tx_config( $tx_config );
+			}
+
+		}
+		$tx_config->write($TX_CONFIG_FILE);
+
+	}
+
 
 }
 
@@ -354,6 +482,8 @@ package Resource {
 	use List::MoreUtils qw(any);
 	use File::Basename qw(dirname);
 	use Config::Tiny;
+	use File::Copy;
+	use Data::Dumper;
 	sub new {
 		my ( $class, $config, $section ) = @_;
 		if ( !exists $config->{$section} ) {
@@ -409,6 +539,31 @@ package Resource {
 		} ,$class;
 	}
 
+#resource->push_lang
+	sub push_lang {
+		my ($self,$lang) = @_;
+		my $po_file_path = $self->{lang_po_list}{$lang};
+		if ( ! defined $po_file_path ) {
+			print STDERR "lang $lang not support.\n";
+			exit 2;
+		}
+		my $trans_po_file_path = $po_file_path =~ s/$GIT_REPO_DIR/$TRANS_DIR/r;
+		unless ( -f $po_file_path ) {
+			print STDERR "file `$po_file_path` not exits.\n";
+			exit 2;
+		}
+		
+		copy($po_file_path, $trans_po_file_path) 
+			or die "copy failed $!"; 
+		print "copy `$po_file_path` file to $trans_po_file_path \n";
+		my $project_name = $self->{project_name};
+		my $resource_name = $self->{resource_name};	
+		chdir $TRANS_DIR or die $!;
+		print "\$ tx push -t -r $project_name.$resource_name -l $lang \n";
+		system "tx push -t -r $project_name.$resource_name -l $lang \n";
+		print "push lang \"$opt_push_lang\" to Transifex \n";
+	}
+	
 #resource->update_tx_config
 	sub update_tx_config {
 		my ($self, $tx_cfg) = @_;
@@ -424,6 +579,9 @@ package Resource {
 		my $file_filter = $self->{data}->{po_file_filter};
 		$file_filter =~ s/<project_root>/$dir/;
 		$tx_cfg->{$section}{file_filter} = $file_filter; 
+
+		print "[ $section ] \n";
+		print Dumper $tx_cfg->{$section};	
 	}
 
 
@@ -433,7 +591,7 @@ package Resource {
 		my @po_files = values $self->{lang_po_list};
 		my $pot = $self->{pot_file};
 		for my $po (@po_files){
-			say "msgmerge -s -U  '$po' '$pot' ";			
+			#say "msgmerge -s -U  '$po' '$pot' ";			
 			qx(msgmerge -s -U  '$po' '$pot' 2>/dev/null );			
 		}
 		
@@ -445,7 +603,7 @@ package Resource {
  		my $self = shift;
 		my $pot_file = $self->{pot_file};
 		my $sf_list = $self->source_file_list;
-		say "write pot file : `$pot_file`";
+		print "\nwrite pot file : `$pot_file`\n";
 
 		#backup pot file
 		qx(mv $pot_file $pot_file.save ; touch $pot_file);
@@ -459,6 +617,21 @@ package Resource {
 		}
 	}
 
+#resource->push_pot 
+	sub push_pot {
+		my $self = shift;
+		my $pot_file_path = $self->{pot_file};
+		my $trans_pot_file_path = $pot_file_path =~ s/$GIT_REPO_DIR/$TRANS_DIR/r;
+
+		copy($pot_file_path, $trans_pot_file_path) 
+			or die "copy failed $!"; 
+		#print "copy `$pot_file_path` file to $trans_pot_file_path \n";
+		
+		my $resource_name = $self->{project_name}.'.'.$self->{resource_name};
+		chdir $TRANS_DIR or die $!;
+		print "\$ tx push -s -r $resource_name \n";
+		system "tx push -s -r $resource_name";
+	}	
 
 #resource->update_locale_config_ini
 	sub update_locale_config_ini {
@@ -510,7 +683,7 @@ package Resource {
 		}
 	}
 
-#resource->generate_mo
+#resource->source_file_list
 	sub source_file_list {
 		my $self = shift;
 		my @keys = keys $self->{data};
