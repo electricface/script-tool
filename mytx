@@ -7,7 +7,7 @@ use Config::Tiny;
 use Data::Dumper;
 use Getopt::Long;
 
-my ($opt_update_tx_config,$opt_commit, $opt_push_lang, $opt_dump, $opt_empty_changes, $opt_help, $opt_list_project,$opt_project, $opt_resource , $opt_push_pot, $opt_stat, $opt_list_source_file, $opt_list_po_file, $opt_info, $opt_list_resource, $opt_auto );
+my ($opt_git, $opt_test_lang, $opt_force, $opt_debug, $opt_update_tx_config,$opt_commit, $opt_push_lang, $opt_dump, $opt_empty_changes, $opt_help, $opt_list_project,$opt_project, $opt_resource , $opt_push_pot, $opt_stat, $opt_list_source_file, $opt_list_po_file, $opt_info, $opt_list_resource, $opt_auto );
 
 if (!exists $ENV{GIT_REPO_DIR} || $ENV{GIT_REPO_DIR} eq '' ){
 	say STDERR 'Not set the $GIT_REPO_DIR environment variables.';
@@ -15,11 +15,11 @@ if (!exists $ENV{GIT_REPO_DIR} || $ENV{GIT_REPO_DIR} eq '' ){
 }
 my $GIT_REPO_DIR= $ENV{GIT_REPO_DIR};
 my $TRANS_DIR="$GIT_REPO_DIR/trans";
-my $PROJECT_RESOURCE_CONFIG_FILE = "$TRANS_DIR/.tx/project-resource.ini";
+my $MYTX_CONFIG_FILE = "$TRANS_DIR/.tx/mytx.ini";
 my $TX_CONFIG_FILE = "$TRANS_DIR/.tx/config";
 
 # read config file
-my $cfg = Config::Tiny->new->read( $PROJECT_RESOURCE_CONFIG_FILE );
+my $cfg = Config::Tiny->new->read( $MYTX_CONFIG_FILE );
 my $tx_config = Config::Tiny->new->read( $TX_CONFIG_FILE );
 
 my $MINIMUM_PERC=30; # pull from tx when > 30%
@@ -31,6 +31,8 @@ GetOptions(
 	"help" => \&print_help,
 	"list-project" => \&Project::print_project_list,
 	"stat" => \$opt_stat,
+	"debug" => \$opt_debug,
+	"force" => \$opt_force,
 	"list-source-file" => \$opt_list_source_file,
 	"list-po-file" => \$opt_list_po_file,
 	"info" => \$opt_info,
@@ -40,6 +42,8 @@ GetOptions(
 	"project=s" => \$opt_project,
 	"push-pot" => \$opt_push_pot,
 	"push-lang=s" => \$opt_push_lang,
+	"test-lang=s" => \$opt_test_lang,
+	"git=s" => \$opt_git,
 	"auto" => \$opt_auto,
 	"install" => \&install,
 	"empty-changes" => \$opt_empty_changes,
@@ -53,7 +57,13 @@ if ( $opt_project ) {
 	my $proj = Project->new( $opt_project );
 	# --list-resource
 	if ( $opt_list_resource ){
-		say for $proj->resources;
+		say for sort $proj->resources;
+	}
+	
+	# --git
+	elsif ( $opt_git ){
+		chdir "$GIT_REPO_DIR/". $proj->{dir_name};
+		system "git $opt_git";
 	}
 
 	# --auto
@@ -71,7 +81,7 @@ if ( $opt_project ) {
 			$r->generate_mo;
 			$r->push_pot;
 		}
-
+		
 	}
 
 
@@ -92,6 +102,17 @@ if ( $opt_project ) {
 		}
 	}
 
+#	--push-lang LANG
+	elsif ( $opt_push_lang ){
+		for my $r ( @{ $proj->{resource_objs} } ){
+			$r->push_lang( $opt_push_lang );
+		}
+	}
+
+#	--test-lang LANG
+	elsif ( $opt_test_lang ){
+		$proj->test_lang( $opt_test_lang );
+	}
 	# --dump
 	elsif ( $opt_dump ){
 		print Dumper $proj;
@@ -122,7 +143,7 @@ if ( $opt_resource ) {
 		$resource->push_pot;	
 	}
 
-#	--push-lang zh-TW
+#	--push-lang LANG
 	elsif ( $opt_push_lang ){
 		$resource->push_lang( $opt_push_lang );
 	}
@@ -185,19 +206,29 @@ sub print_help {
 	print 
 "--help
 --install
+--debug
+--force pull all translations
 --list-project
---project PROJECT_NAME
+--update-tx-config
+--project \$PROJECT_NAME
+	--empty-changes
 	--list-resource
 	--auto
 	--commit
+	--info
 	--dump
---resource RESOURCE_NAME
+	--git \$GIT_CMD
+	--push-pot
+	--push-lang \$LANG
+	--test-lang \$LANG
+--resource \$RESOURCE_NAME
 	--stat
 	--info
 	--dump
 	--list-po-file
 	--list-source-file
-	--push-lang LANG
+	--push-pot
+	--push-lang \$LANG
 ";
 	exit;
 }
@@ -336,6 +367,8 @@ use List::MoreUtils qw(any);
 			system "git commit -m '$commit_str' ";
 			say "\$ git push";
 			system "git push";
+			my $pulls_url = $self->{git_url} =~ s{.git$}{/pulls}r ; 
+			say "New Pull Request : $pulls_url";
 		}	
 		else {
 			say "Cancel\n\$ git reset HEAD *";
@@ -349,7 +382,7 @@ use List::MoreUtils qw(any);
 		my $self = shift;
 		my $local_trans_dir = "$TRANS_DIR/$self->{dir_name}";
 		my $git_repo_dir = "$GIT_REPO_DIR/$self->{dir_name}";
-		my $cmd = "rsync -rtpv --exclude='en.po' --exclude='*zh_CN*' --exclude='messages.mo' ".
+		my $cmd = "rsync -rtpv --exclude='en.po'  --exclude='messages.mo' ".
 			"--exclude='*.pot' --exclude='*.sw?' $local_trans_dir/ $git_repo_dir";
 		my %po_regex_list;	
 		for my $r ( @{ $self->{resource_objs} } ){
@@ -403,7 +436,9 @@ use List::MoreUtils qw(any);
 		my $self = shift;
 		chdir $TRANS_DIR or die $!;
 		my $ids = join ",", $self->tx_resource_ids;
-		my $cmd = "tx pull -r '$ids' -a --minimum-perc=$MINIMUM_PERC";
+		my $force_option = $opt_force ? "--force" : '' ;
+
+		my $cmd = "tx pull -r '$ids' -a $force_option --minimum-perc=$MINIMUM_PERC";
 		print "\e[38;5;207mpull po from transifex\e[0;m";
 		system $cmd .q{|perl -n -e '
 			use 5.12.4;
@@ -438,7 +473,7 @@ use List::MoreUtils qw(any);
 			}
 		}
 		close $git_clean_pipe;
-		qx( git stash && git stash clear );
+		system " git stash ; git stash clear ";
 	}
 	
 
@@ -460,7 +495,7 @@ use List::MoreUtils qw(any);
 		if ( $deepin_remote =~ m{^https://github.com/linuxdeepin/.*\.git} ){
 			$deepin_remote =~ s{^https://github.com/}(git\@github.com:);
 		} else {
-			say "bad config in file `$PROJECT_RESOURCE_CONFIG_FILE` section [-git] $dir_name";
+			say "bad config in file `$MYTX_CONFIG_FILE` section [-git] $dir_name";
 			exit;
 		};
 		my $git_branch = $self->{git_branch};
@@ -472,6 +507,28 @@ use List::MoreUtils qw(any);
 		}
 	}
 
+#project->test_lang
+	sub test_lang {
+		my ($self,$lang )= @_;
+		$lang = 'zh_CN' if $lang eq '-';
+		my $dir_name = $self->{dir_name};
+		my $exec_path = $config->{_test}{$dir_name}; 
+		$exec_path =~ s{<project_root>}{$GIT_REPO_DIR/$dir_name};
+		print "exec path: $exec_path \n";
+		print "\e[38;5;99m -- LANG = $lang \e[0;m\n";
+		for my $r ( @{$self->{resource_objs} } ){
+			my $po = $r->{lang_po_list}{$lang};
+			my ($trans,$untrans) = main::msgstat($po);
+			if ( $untrans == 0 ){
+				print "\e[38;5;99m$trans/$untrans\t$po \e[0;m\n";
+			} else {
+				print "\e[38;5;99m$trans/\e[38;5;9m$untrans\t$po \e[0;m\n";
+			}
+		}
+		system "LANG=$lang.UTF-8 LANGUAGE=$lang.UTF-8 $exec_path" ;
+	}
+
+#project->tx_resource_ids
 	sub tx_resource_ids {
 		my $self= shift;
 		my @tx_resource_ids;
@@ -483,13 +540,23 @@ use List::MoreUtils qw(any);
 		return @tx_resource_ids;
 	}
 
+#project->resources
 	sub resources {
 		my $self = shift;
-		if ($self->{type} eq 's'){
-			my $resource_name = $self->{resource_objs}[0]{resource_name};
-			return  ( "$self->{name}.$resource_name" );		
+		if ( $self->{count} == 1 ){
+			my $resource_zero = $self->{resource_objs}[0];
+			my $resource_name = $resource_zero->{resource_name};
+			my $proj_name = $resource_zero->{project_name};
+			
+			return  ( "$proj_name.$resource_name" );		
 		} else {
-			return map { "$self->{name}.$_" } values $self->{data};
+			my @resources;
+			for my $r ( @{ $self->{resource_objs} } ){
+				my $proj_name = $r->{project_name}; 
+				my $resource_name = $r->{resource_name};
+				push @resources, "$proj_name.$resource_name";
+			}
+			return @resources;
 		}
 	}
 
@@ -626,9 +693,20 @@ package Resource {
 		my $self = shift;
 		my @po_files = values $self->{lang_po_list};
 		my $pot = $self->{pot_file};
-		for my $po (@po_files){
-			#print "msgmerge -s -U  '$po' '$pot' \n";			
+
+		my $lang_po = $self->{lang_po_list};
+		for my $lang ( keys $lang_po ){
+			my $po = $lang_po->{$lang};
 			qx(msgmerge -s -U  '$po' '$pot' 2>/dev/null );			
+
+			# check zh_CN more carefully	
+			my $careful_lang = 'zh_CN';
+			if ( $lang eq $careful_lang ){
+				my ( $trans , $untrans) = main::msgstat($po);
+				if ( $untrans != 0 ){
+					system "zenity --info --text='lang $careful_lang not translated over' &";	
+				}
+			}
 		}
 		
 	}
@@ -763,16 +841,30 @@ package Resource {
 		my %po_stat;
 		for ( sort keys %{ $ref_po_files } ){
 			my ($lang,$file) = ($_ , $$ref_po_files{$_} );
-			my $msgstat = qx(LC_ALL=C msgfmt --statistics -o /dev/null $file 2>&1);
-			if ( $msgstat =~ /(\d+)\D+(\d+)?/ ) {
-				my ( $trans, $untrans ) = ( $1, $2 );
-				$untrans = defined $untrans ? $untrans : 0;
-				$po_stat{$lang} = [ $trans, $untrans ];
-			}
+
+			main::debug( "--- LANG = $lang \n" );
+			$po_stat{$lang} = [ main::msgstat($file) ];
 		}
 		return \%po_stat;
 	}
 
+}
+
+sub msgstat {
+	my $file = shift;	
+	my $msgstat = qx(LC_ALL=C msgfmt --statistics -o /dev/null $file 2>&1);
+	debug( $msgstat );
+	my ($trans, $untrans);
+	#like: 223 translated messages, 1 fuzzy translation, 2 untranslated messages.
+	if ( $msgstat =~ /(\d+)\s*trans\D+(\d+)\s*fuzzy\D+(\d+)\s*untrans\D+/ ) {
+		$trans = $1;
+		$untrans = $2 + $3;
+	} elsif ( $msgstat =~ /(\d+)\D+(\d+)?/ ){
+		( $trans, $untrans ) = ( $1, $2 );
+		$untrans = defined $untrans ? $untrans : 0;
+	}
+	debug( "trans $trans , untrans $untrans\n\n" );
+	return ( $trans, $untrans );
 }
 
 sub print_stat {
@@ -790,6 +882,10 @@ sub print_stat {
 		print "\n" if $n % 2 == 0; 
 	}
 	print "\n" if $n % 2;
+}
+
+sub debug {
+	print shift if $opt_debug;
 }
 
 sub install {
