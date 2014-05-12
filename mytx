@@ -52,7 +52,7 @@ GetOptions(
 );
 
 
-# --project STRING
+# --project $PROJECT_NAME 
 if ( $opt_project ) {
 	my $proj = Project->new( $opt_project );
 	# --list-resource
@@ -73,7 +73,7 @@ if ( $opt_project ) {
 		$proj->update_po_from_transifex;
 		$proj->update_po_from_local;
 
-#	for each resouce in the project
+#	for each resource in the project
 		for my $r ( @{ $proj->{resource_objs} } ){
 			$r->update_pot_file;	
 			$r->merge_po_with_pot;
@@ -123,12 +123,28 @@ if ( $opt_project ) {
 	elsif ( $opt_empty_changes ) {
 		$proj->empty_all_changes;
 	}
+
+#	--list-source-file
+	elsif ( $opt_list_source_file ) {
+		for my $r ( @{ $proj->{resource_objs} } ){
+			$r->list_source_file;
+		}
+		
+	}
+
+#	--list-po-file
+	elsif ( $opt_list_po_file ) {
+		for my $r ( @{ $proj->{resource_objs} } ){
+			$r->list_po_file;
+		}
+		
+	}
 	else {
 		say "wrong used --project";
 	}
 }
 
-# --resource STRING 
+# --resource $RESOUECE_NAME 
 if ( $opt_resource ) {
 	my $resource = Resource->new( $cfg , $opt_resource );
 
@@ -151,21 +167,14 @@ if ( $opt_resource ) {
 
 	# --list-source-file
 	elsif ( $opt_list_source_file ){
-		my $ref_sf_list = $resource->source_file_list;
-		for (sort keys $ref_sf_list) {
-			say "xgettext option : $_";
-			for my $f ( @{ $ref_sf_list->{$_} } ){
-				say "  " . $f; 
-			}
-		}
+		$resource->list_source_file;
+
 	}
 
 	# --list-po-file
 	elsif ( $opt_list_po_file ){
-		my $ref_po_file_list = $resource->{lang_po_list};
-		for ( sort keys $ref_po_file_list ){
-			say "$_  \t" . $ref_po_file_list->{$_} ;
-		}
+		$resource->list_po_file;
+
 	} 
 
 	# --info
@@ -218,6 +227,8 @@ sub print_help {
 	--info
 	--dump
 	--git \$GIT_CMD
+	--list-po-file
+	--list-source-file
 	--push-pot
 	--push-lang \$LANG
 	--test-lang \$LANG
@@ -485,7 +496,7 @@ use List::MoreUtils qw(any);
 		chdir $proj_path or die $!;
 		my $git_cfg = Config::Tiny->new->read("$proj_path/.git/config");
 		my $origin  = $git_cfg->{'remote "origin"'}->{url};
-		if ( $origin !~ m{github.com:$GITHUB_ACCOUNT/} ) {
+		if ( $origin !~ m{git\@github.com:$GITHUB_ACCOUNT/} ) {
 			say "Bad remote orgin url";
 			exit;
 		}
@@ -609,6 +620,14 @@ package Resource {
 		my $pot_file = $config->{$section}{pot_file};
 		$pot_file =~ s/<project_root>/$project_root/;
 
+		my $ts_file = $config->{$section}{ts_file};
+		if ( defined $ts_file ){
+			$ts_file =~ s/<project_root>/$project_root/;
+		} else {	
+			$ts_file = '';
+		}
+		
+
 		my $po_file_filter = $config->{$section}{po_file_filter};
 		( my $po_file_regex = $po_file_filter ) =~ s/<project_root>/$project_root/;
 		$po_file_regex =~ s/<lang>/([A-Za-z_]+)/;
@@ -633,6 +652,7 @@ package Resource {
 			dir_name => $dir_name,
 			full_name => $full_name,
 			pot_file => $pot_file,
+			ts_file => $ts_file,
 			project_name => $project_name,
 			project_root => $project_root,
 			resource_name => $resource_name,
@@ -656,9 +676,10 @@ package Resource {
 			exit 2;
 		}
 		
-		copy($po_file_path, $trans_po_file_path) 
-			or die "copy failed $!"; 
-		print "copy `$po_file_path` file to $trans_po_file_path \n";
+		my $dir = dirname $trans_po_file_path;
+		qx(mkdir -p $dir); 
+		qx(cp $po_file_path $trans_po_file_path); 
+		main::debug( "cp $po_file_path $trans_po_file_path \n");
 		my $project_name = $self->{project_name};
 		my $resource_name = $self->{resource_name};	
 		chdir $TRANS_DIR or die $!;
@@ -716,16 +737,38 @@ package Resource {
 
  		my $self = shift;
 		my $pot_file = $self->{pot_file};
-		my $sf_list = $self->source_file_list;
-		#print "\nwrite pot file : `$pot_file`\n";
-
 		#backup pot file
 		qx(mv $pot_file $pot_file.save ; touch $pot_file);
+		my $sf_list = $self->source_file_list;
+
+		my $ts_file = $self->{ts_file};
+
+#	Generate ts file
+		if ( $ts_file ne '' ){
+			main::debug("Generate ts file : $ts_file\n");
+			my $project_root = $GIT_REPO_DIR.'/'.$self->{dir_name};
+			system "/usr/lib/x86_64-linux-gnu/qt5/bin/deepin-lupdate -recursive $project_root -ts $ts_file";
+			
+			main::debug("Covert ts to pot.\n");
+			open my $lconvert_pipe, "lconvert -i $ts_file -of pot |";
+			open my $pot_fh , '>' ,$pot_file;
+			for ( <$lconvert_pipe> ){
+				if ( ! /^msgctxt/ ){
+					print $pot_fh $_;	
+				}
+			}
+			close $pot_fh;
+			close $lconvert_pipe;
+		}	
+
+
+		main::debug("\nwrite pot file : `$pot_file`\n" );
 		for my $option ( sort keys %$sf_list ){	
 			open my $xgettext , "|xgettext $option --no-location --from-code=utf-8 -s -j -f - -o $pot_file 2>/dev/null"
 				or die "error $!";
 			for my $f ( @{ $$sf_list{$option} } ) {
 					say $xgettext $f;
+					main::debug("source file: $f\n");
 			}
 			close $xgettext
 		}
@@ -736,10 +779,11 @@ package Resource {
 		my $self = shift;
 		my $pot_file_path = $self->{pot_file};
 		my $trans_pot_file_path = $pot_file_path =~ s/$GIT_REPO_DIR/$TRANS_DIR/r;
-
-		copy($pot_file_path, $trans_pot_file_path) 
-			or die "copy failed $!"; 
-		#print "copy `$pot_file_path` file to $trans_pot_file_path \n";
+ 		
+		my $dir = dirname $trans_pot_file_path;
+		qx(mkdir -p $dir);
+		qx( cp $pot_file_path $trans_pot_file_path);
+		main::debug("cp $pot_file_path $trans_pot_file_path \n");
 		
 		my $resource_name = $self->{project_name}.'.'.$self->{resource_name};
 		chdir $TRANS_DIR or die $!;
@@ -795,6 +839,31 @@ package Resource {
 		if ( -x -f "$tools_dir/$generate_mo_script" ) {
 			chdir $tools_dir;
 			system "./$generate_mo_script";
+		}
+	}
+
+# resource->list_po_file
+	sub list_po_file {
+		my $self = shift;
+		my $ref_po_file_list = $self->{lang_po_list};
+		say "resource name: $self->{project_name}.$self->{resource_name}" ;
+		for ( sort keys $ref_po_file_list ){
+			say "$_  \t" . $ref_po_file_list->{$_} ;
+		}
+		print "\n";
+
+	}
+
+# resource->list_source_file
+	sub list_source_file {
+		my $self = shift;
+		my $ref_sf_list = $self->source_file_list;
+		say "resource name: $self->{project_name}.$self->{resource_name}" ;
+		for (sort keys $ref_sf_list) {
+			say "xgettext option : $_";
+			for my $f ( @{ $ref_sf_list->{$_} } ){
+				say "  " . $f; 
+			}
 		}
 	}
 
@@ -889,7 +958,7 @@ sub debug {
 }
 
 sub install {
-    my $cmd = "sudo apt-get install -y git transifex-client ";
+    my $cmd = "sudo apt-get install -y git transifex-client qttools5-dev-tools";
 	say '$ '. $cmd;
 	system $cmd;
 }
