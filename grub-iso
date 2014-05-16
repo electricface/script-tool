@@ -7,19 +7,22 @@ use Getopt::Long qw(:config no_ignore_case);
 use File::Slurp;
 use 5.14.2;
 my $GRUB_CUSTOM_PATH ='/etc/grub.d/40_custom';
+my $DEFAULT_LOCALE="zh_CN";
 
 my ($tempf_fh,$tempf_path) = tempfile();
 my $grub_custom_content ='';
 $grub_custom_content = read_file($GRUB_CUSTOM_PATH)
 	if ( -f -r $GRUB_CUSTOM_PATH );
 
-my (@opt_add, @opt_delete, $opt_list, $opt_update_grub );
+my ($opt_keyboard_layout, $opt_locale ,@opt_add, @opt_delete, $opt_list, $opt_update_grub );
 GetOptions(
 	"add=s{,}" => \@opt_add,
 	"delete=s{,}" => \@opt_delete,
 	"list!" => \$opt_list,
+	"locale=s" => \$opt_locale,
 	"help!" => \&print_help_message,
 	"update-grub" => \$opt_update_grub,
+	"keyboard-layout=s" => \$opt_keyboard_layout, 
 );
 
 if ( $opt_list ){
@@ -56,17 +59,27 @@ for ( @opt_delete ){
 	$grub_custom_content =~ s/\n*#start:$iso_id.*#end:$iso_id\n*//s
 }
 
-if ( @opt_add || @opt_delete || $opt_update_grub ){
+if ( @opt_add || @opt_delete ){
 	do_with_temp_file();
 
 	if ( $opt_update_grub ){
-		qx(sudo update-grub);
+		update_grub();
 	}
 
-} else {
+} 
+elsif ( $opt_update_grub ){
+	update_grub();
+}
+else {
 	print_help_message();
 }
 #end;
+
+
+sub update_grub {
+	print "\$ sudo update-grub \n";
+	qx(sudo update-grub);
+}
 
 sub print_help_message {
 	print <<_EOF_;
@@ -74,6 +87,8 @@ sub print_help_message {
 -d --delete <iso> rm iso
 -u --update-grub run `sudo update-grub` command
 -l --list list iso found in $GRUB_CUSTOM_PATH;
+--locale default is zh_CN
+-k --keyboard-layout <layout> like 'us' , 'cn'
 -h --help show help message
 _EOF_
 exit;
@@ -83,7 +98,7 @@ sub list_grub_custom {
 my ($menu_entry,$iso_path);
 format LS_GRUB_CUSTOM =
 @<<<<<<<<<<<<<<<<<<<<<<<<<<<< @| @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-$menu_entry,'--',$iso_path
+$menu_entry,$iso_path
 .
 	$~ = 'LS_GRUB_CUSTOM';
 	for (split /\n/, $grub_custom_content ){
@@ -98,6 +113,7 @@ $menu_entry,'--',$iso_path
 sub do_with_temp_file {
 	print $tempf_fh $grub_custom_content;
 	close $tempf_fh;
+	print "write file $GRUB_CUSTOM_PATH \n";
 	qx(sudo mv $tempf_path $GRUB_CUSTOM_PATH);
 
 	#chmod +x
@@ -188,6 +204,16 @@ seed: $seed_path";
 		die "can't file vmlinuz or initrd";
 	}
 
+	my $locale;
+	if ( defined $opt_locale ){
+		$locale = $opt_locale;
+	} else { $locale = $DEFAULT_LOCALE };
+	
+	my $keyboard_layout_cfg = '';
+	if ( defined $opt_keyboard_layout ){
+		$keyboard_layout_cfg = "keyboard-configuration/layoutcode?=$opt_keyboard_layout";
+	}
+
 	return $basename, <<_EOF_ ;
 
 #start:$basename,path:$cpath
@@ -195,7 +221,9 @@ menuentry "$volume_id -- $basename" {
 	set root=$root_disk
 	insmod loopback
 	loopback loop $root_disk$grub_path
-	linux (loop)$vmlinuz_path file=(loop)$seed_path boot=casper iso-scan/filename=$grub_path noprompt noeject
+	load_video
+	gfxmode \$linux_gfx_mode
+	linux (loop)$vmlinuz_path file=/cdrom$seed_path boot=casper iso-scan/filename=$grub_path noprompt noeject splash quiet \$vt_handoff locale=$locale $keyboard_layout_cfg
 	initrd (loop)$initrd_path
 }
 #end:$basename
