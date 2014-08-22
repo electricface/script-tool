@@ -7,7 +7,7 @@ use Config::Tiny;
 use Data::Dumper;
 use Getopt::Long;
 
-my ($opt_git, $opt_test_lang, $opt_force, $opt_debug, $opt_update_tx_config,$opt_commit, $opt_push_lang, $opt_dump, $opt_empty_changes, $opt_help, $opt_list_project,$opt_project, $opt_resource , $opt_push_pot, $opt_stat, $opt_list_source_file, $opt_list_po_file, $opt_info, $opt_list_resource, $opt_auto );
+my ($opt_update_po, $opt_pull_from_deepin, $opt_git, $opt_test_lang, $opt_force, $opt_debug, $opt_update_tx_config,$opt_commit, $opt_push_lang, $opt_dump, $opt_empty_changes, $opt_help, $opt_list_project,$project_id, $resource_id , $opt_push_pot, $opt_stat, $opt_list_source_file, $opt_list_po_file, $opt_info, $opt_list_resource, $opt_auto );
 
 if (!exists $ENV{GIT_REPO_DIR} || $ENV{GIT_REPO_DIR} eq '' ){
 	say STDERR 'Not set the $GIT_REPO_DIR environment variables.';
@@ -17,6 +17,7 @@ my $GIT_REPO_DIR= $ENV{GIT_REPO_DIR};
 my $TRANS_DIR="$GIT_REPO_DIR/trans";
 my $MYTX_CONFIG_FILE = "$TRANS_DIR/.tx/mytx.ini";
 my $TX_CONFIG_FILE = "$TRANS_DIR/.tx/config";
+my $CAREFUL_LANG = 'zh_CN';
 
 # read config file
 my $cfg = Config::Tiny->new->read( $MYTX_CONFIG_FILE );
@@ -24,8 +25,17 @@ my $tx_config = Config::Tiny->new->read( $TX_CONFIG_FILE );
 
 my $MINIMUM_PERC=30; # pull from tx when > 30%
 my $GITHUB_ACCOUNT=$cfg->{_}{github_account};
-my @COMMIT_FILE_EXTENSIONS = qw(po pot ini desktop);
 Project->init($cfg);
+
+my $id = $ARGV[0];
+if ( $id !~ /\./ ) {
+	$project_id = $id;
+} else {
+	if ( $id =~ /.*\.$/) {
+		$id =~ s/\.$//g;
+	}
+	$resource_id = $id;
+}
 
 GetOptions(
 	"help" => \&print_help,
@@ -37,13 +47,15 @@ GetOptions(
 	"list-po-file" => \$opt_list_po_file,
 	"info" => \$opt_info,
 	"dump" => \$opt_dump,
-	"resource=s" => \$opt_resource,
+	"resource=s" => \$resource_id,
 	"list-resource" => \$opt_list_resource,
-	"project=s" => \$opt_project,
+	"project=s" => \$project_id,
 	"push-pot" => \$opt_push_pot,
 	"push-lang=s" => \$opt_push_lang,
 	"test-lang=s" => \$opt_test_lang,
 	"git=s" => \$opt_git,
+	"pull-from-deepin" => \$opt_pull_from_deepin,
+	"update-po" => \$opt_update_po,
 	"auto" => \$opt_auto,
 	"install" => \&install,
 	"empty-changes" => \$opt_empty_changes,
@@ -52,9 +64,10 @@ GetOptions(
 );
 
 
+
 # --project $PROJECT_NAME 
-if ( $opt_project ) {
-	my $proj = Project->new( $opt_project );
+if ( $project_id ) {
+	my $proj = Project->new( $project_id );
 	# --list-resource
 	if ( $opt_list_resource ){
 		say for sort $proj->resources;
@@ -62,8 +75,26 @@ if ( $opt_project ) {
 	
 	# --git
 	elsif ( $opt_git ){
-		chdir "$GIT_REPO_DIR/". $proj->{dir_name};
+		chdir $proj->{project_root} or die $!;
 		system "git $opt_git";
+	}
+	
+	# --pull-from-deepin
+	elsif ( $opt_pull_from_deepin ){
+		$proj->empty_all_changes;
+		$proj->git_pull_from_linuxdeepin;
+
+		$proj->stat;
+	}
+
+
+	# --update-po
+	elsif ( $opt_update_po ) {
+		$proj->empty_all_changes;
+		$proj->git_pull_from_linuxdeepin;
+		$proj->update_po_from_transifex;
+		$proj->update_po_from_local;
+		$proj->stat;	
 	}
 
 	# --auto
@@ -71,19 +102,24 @@ if ( $opt_project ) {
 		$proj->empty_all_changes;
 		$proj->git_pull_from_linuxdeepin;
 		$proj->update_po_from_transifex;
-		$proj->update_po_from_local;
+		#$proj->update_po_from_local;
 
-#	for each resource in the project
+		# for each resource in the project
 		for my $r ( @{ $proj->{resource_objs} } ){
 			$r->update_pot_file;	
+			$r->backup_git_po;
+			$r->merge_po_git_with_transifex;
 			$r->merge_po_with_pot;
+			$r->po_change_stat;
 			$r->update_locale_config_ini;
 			$r->generate_mo;
-			$r->push_pot;
+			#$r->push_pot;
+			#$r->push_lang( $CAREFUL_LANG );
 		}
+
+		$proj->stat;
 		
 	}
-
 
 #	--info 
 	elsif ( $opt_info ){
@@ -103,6 +139,7 @@ if ( $opt_project ) {
 	}
 
 #	--push-lang LANG
+	# TODO : 多语言参数支持
 	elsif ( $opt_push_lang ){
 		for my $r ( @{ $proj->{resource_objs} } ){
 			$r->push_lang( $opt_push_lang );
@@ -113,6 +150,7 @@ if ( $opt_project ) {
 	elsif ( $opt_test_lang ){
 		$proj->test_lang( $opt_test_lang );
 	}
+
 	# --dump
 	elsif ( $opt_dump ){
 		print Dumper $proj;
@@ -139,14 +177,20 @@ if ( $opt_project ) {
 		}
 		
 	}
+
+	# --stat
+	elsif ( $opt_stat ) {
+		$proj->stat;
+	}
+
 	else {
 		say "wrong used --project";
 	}
 }
 
 # --resource $RESOUECE_NAME 
-if ( $opt_resource ) {
-	my $resource = Resource->new( $cfg , $opt_resource );
+if ( $resource_id ) {
+	my $resource = Resource->new( $cfg , $resource_id );
 
 	# --stat
 	if ( $opt_stat ) {
@@ -213,7 +257,12 @@ if ( $opt_resource ) {
 
 sub print_help {
 	print 
-"--help
+"
+第一个参数为 资源标记
+如果资源标记不含 . 符号，则表示项目；
+如果资源标记包含 . 符号，则表示资源;
+
+--help
 --install
 --debug
 --force pull all translations
@@ -221,6 +270,8 @@ sub print_help {
 --update-tx-config
 --project \$PROJECT_NAME
 	--empty-changes
+	--pull-from-deepin
+	--update-po
 	--list-resource
 	--auto
 	--commit
@@ -284,6 +335,7 @@ use List::MoreUtils qw(any);
 			$project_dir_name = $1;
 			$git_branch = $2;	
 		}
+		my $project_root = $GIT_REPO_DIR.'/'.$project_dir_name;
 
 		my @resources;
 		my $git_url = $config->{'_git'}{$project_dir_name};
@@ -296,11 +348,9 @@ use List::MoreUtils qw(any);
 			my $type;
 			if ( $count  == 1 && $ref_project->[0] eq '_' ) {
 				#Single;
-				$type = 's';	
 				push @resources , Resource->new( $config, $project_name );
 			} else {
 				#Multiple
-				$type = 'm';	
 				for (values $ref_project ){
 					push @resources , Resource->new( $config, $project_name.'.'.$_ );
 				}
@@ -313,7 +363,7 @@ use List::MoreUtils qw(any);
 				data => $ref_project ,
 				resource_objs => \@resources,
 				count => $count ,
-				type => $type ,
+				project_root => $project_root,
 			} , $class;
 		}
 	}
@@ -330,9 +380,7 @@ use List::MoreUtils qw(any);
 		my $tx_project_name = $self->{resource_objs}[0]{project_name};
 		say "tx project: https://www.transifex.com/projects/p/$tx_project_name"; 
 
-		my $dir_name = $self->{dir_name};
-		my $proj_path = $GIT_REPO_DIR .'/'. $dir_name;
-		chdir $proj_path or die $!;
+		chdir $self->{project_root} or die $!;
 
 		say "\nGit log about author $GITHUB_ACCOUNT:";
 		system "git log -n5  --author=$GITHUB_ACCOUNT --oneline";
@@ -341,16 +389,26 @@ use List::MoreUtils qw(any);
 # project->commit
 	sub commit {
 		my $self = shift;
-		my $dir_name = $self->{dir_name};
-		my $proj_path = $GIT_REPO_DIR .'/'. $dir_name;
-		chdir $proj_path or die "can chdir $!";
+		chdir $self->{project_root} or die $!;
 
+		my @COMMIT_FILE_EXTENSIONS = qw(pot ini desktop ts);
 		for my $ext (@COMMIT_FILE_EXTENSIONS) {
 			system "git add *.$ext";
 		}
+
+		for my $r ( @{ $self->{resource_objs} } ){
+			my $ref_po_need_git_add = $r->po_change_stat;
+			for ( @$ref_po_need_git_add ){
+				print "\$ git add $_\n";
+				system "git add $_";
+			}
+		}
+		
 		my @git_status = qx(git status -s);
 		my @file_changes_info;
 		my %change;
+
+		push @COMMIT_FILE_EXTENSIONS , 'po';
 		for my $s (@git_status) {
 			if ($s =~ /^(A|M|D).*\.(\w+)$/) {
 				my $mod_flag = $1;
@@ -378,8 +436,6 @@ use List::MoreUtils qw(any);
 			system "git commit -m '$commit_str' ";
 			say "\$ git push";
 			system "git push";
-			my $pulls_url = $self->{git_url} =~ s{.git$}{/pulls}r ; 
-			say "New Pull Request : $pulls_url";
 		}	
 		else {
 			say "Cancel\n\$ git reset HEAD *";
@@ -389,10 +445,12 @@ use List::MoreUtils qw(any);
 
 	}
 
+
+# project->update_po_from_local
 	sub update_po_from_local {
 		my $self = shift;
 		my $local_trans_dir = "$TRANS_DIR/$self->{dir_name}";
-		my $git_repo_dir = "$GIT_REPO_DIR/$self->{dir_name}";
+		my $git_repo_dir = $self->{project_root};
 		my $cmd = "rsync -rtpv --exclude='en.po'  --exclude='messages.mo' ".
 			"--exclude='*.pot' --exclude='*.sw?' $local_trans_dir/ $git_repo_dir";
 		my %po_regex_list;	
@@ -473,8 +531,7 @@ use List::MoreUtils qw(any);
 	sub empty_all_changes {
 		my $self = shift;
 		my $dir_name = $self->{dir_name};
-		my $proj_path = $GIT_REPO_DIR .'/'. $dir_name;
-		chdir $proj_path or die $!;
+		chdir $self->{project_root} or die $!;
 		print "Empty all the changes in project \"$dir_name\".\n";
 		open my $git_clean_pipe , "git clean -fd |";
 		for (<$git_clean_pipe>) {
@@ -491,27 +548,10 @@ use List::MoreUtils qw(any);
 #project->git_pull_from_linuxdeepin
 	sub git_pull_from_linuxdeepin {
 		my $self = shift;
-		my $dir_name = $self->{dir_name};
-		my $proj_path = $GIT_REPO_DIR .'/'. $dir_name;
-		chdir $proj_path or die $!;
-		my $git_cfg = Config::Tiny->new->read("$proj_path/.git/config");
-		my $origin  = $git_cfg->{'remote "origin"'}->{url};
-		if ( $origin !~ m{git\@github.com:$GITHUB_ACCOUNT/} ) {
-			say "Bad remote orgin url";
-			exit;
-		}
-		my $deepin_remote = $self->{git_url};
-
-		#like https://github.com/linuxdeepin/deepin-screenshot.git
-		if ( $deepin_remote =~ m{^https://github.com/linuxdeepin/.*\.git} ){
-			$deepin_remote =~ s{^https://github.com/}(git\@github.com:);
-		} else {
-			say "bad config in file `$MYTX_CONFIG_FILE` section [-git] $dir_name";
-			exit;
-		};
-		my $git_branch = $self->{git_branch};
-		print "\$ git pull $deepin_remote $git_branch\n";
-		system "git pull $deepin_remote $git_branch";
+		my $project_root = $self->{project_root};
+		chdir $project_root or die $!;
+		print "\$ git pull \n";
+		system "git pull";
 		if ($?) {
 			print STDERR "git pull on error\n";
 			exit;
@@ -524,7 +564,7 @@ use List::MoreUtils qw(any);
 		$lang = 'zh_CN' if $lang eq '-';
 		my $dir_name = $self->{dir_name};
 		my $exec_path = $config->{_test}{$dir_name}; 
-		$exec_path =~ s{<project_root>}{$GIT_REPO_DIR/$dir_name};
+		$exec_path =~ s{<project_root>}($self->{project_root});
 		print "exec path: $exec_path \n";
 		print "\e[38;5;99m -- LANG = $lang \e[0;m\n";
 		for my $r ( @{$self->{resource_objs} } ){
@@ -588,13 +628,21 @@ use List::MoreUtils qw(any);
 		$tx_config->write($TX_CONFIG_FILE);
 
 	}
+	
+	sub stat {
+		my $self= shift;
+		for my $r ( @{ $self->{resource_objs} } ){
+			main::print_stat( $r->po_statistics );
+		}
 
+	}
 
 }
 
 package Resource {
 	use List::MoreUtils qw(any);
 	use File::Basename qw(dirname);
+	use File::Spec;
 	use Config::Tiny;
 	use File::Copy;
 	use Data::Dumper;
@@ -617,6 +665,7 @@ package Resource {
 
 
 		my $project_root = "$GIT_REPO_DIR/$dir_name",
+		my $project_trans_root = "$TRANS_DIR/$dir_name";
 		my $pot_file = $config->{$section}{pot_file};
 		$pot_file =~ s/<project_root>/$project_root/;
 
@@ -629,21 +678,40 @@ package Resource {
 		
 
 		my $po_file_filter = $config->{$section}{po_file_filter};
-		( my $po_file_regex = $po_file_filter ) =~ s/<project_root>/$project_root/;
-		$po_file_regex =~ s/<lang>/([A-Za-z_]+)/;
+		my $trans_po_file_regex = $po_file_filter =~ s/<project_root>/$project_trans_root/r;
+		my $git_po_file_regex = $po_file_filter =~ s/<project_root>/$project_root/r;
+		$trans_po_file_regex =~ s/<lang>/([A-Za-z_]+)/;
+		$git_po_file_regex =~ s/<lang>/([A-Za-z_]+)/;
 
 		my $po_dir = ( split /<lang>/ , $po_file_filter )[0];
 		$po_dir = dirname($po_dir);
-		$po_dir =~ s/<project_root>/$project_root/;
+		my $trans_po_dir = $po_dir =~ s/<project_root>/$project_trans_root/r;
+		my $git_po_dir = $po_dir =~ s/<project_root>/$project_root/r;
 
-		my @po_files = qx(find $po_dir -iname "*.po" );
+
 		my %lang_po_list;
-
-		for ( @po_files ) {
+		my @git_po_files = qx(find $git_po_dir -iname "*.po" );
+		for ( @git_po_files ) {
 			chomp;
-			if ( /^$po_file_regex$/ ){
+			if ( /^$git_po_file_regex$/ ){
 				my ($lang,$file) = ($1,$_);
-				$lang_po_list{$lang} = $file;
+				$lang_po_list{$lang} = [ $file , '' ];
+			}
+		}
+
+		my @trans_po_files = qx(find $trans_po_dir -iname "*.po" );
+		for ( @trans_po_files ) {
+			chomp;
+			if ( /^$trans_po_file_regex$/ ){
+				my ($lang,$file) = ($1,$_);
+
+				if ( exists $lang_po_list{$lang} ){
+					my $git_po = @{ $lang_po_list{$lang} }[0];
+					$lang_po_list{$lang} = [ $git_po , $_ ];
+				} else {
+
+					$lang_po_list{$lang} = [ '', $_ ];
+				}
 			}
 		}
 
@@ -656,7 +724,7 @@ package Resource {
 			project_name => $project_name,
 			project_root => $project_root,
 			resource_name => $resource_name,
-			po_file_regex => $po_file_regex,
+			git_po_file_regex => $git_po_file_regex,
 			po_dir => $po_dir,
 			lang_po_list => \%lang_po_list,
 		} ,$class;
@@ -665,12 +733,12 @@ package Resource {
 #resource->push_lang
 	sub push_lang {
 		my ($self,$lang) = @_;
-		my $po_file_path = $self->{lang_po_list}{$lang};
+		my ($po_file_path, $trans_po_file_path ) = @{ $self->{lang_po_list}{$lang} };
 		if ( ! defined $po_file_path ) {
 			print STDERR "lang $lang not support.\n";
 			exit 2;
 		}
-		my $trans_po_file_path = $po_file_path =~ s/$GIT_REPO_DIR/$TRANS_DIR/r;
+
 		unless ( -f $po_file_path ) {
 			print STDERR "file `$po_file_path` not exits.\n";
 			exit 2;
@@ -685,7 +753,7 @@ package Resource {
 		chdir $TRANS_DIR or die $!;
 		#print "\$ tx push -t -r $project_name.$resource_name -l $lang \n";
 		system "tx push -t -r $project_name.$resource_name -l $lang \n";
-		print "push lang \"$opt_push_lang\" to Transifex \n";
+		print "push lang \"$opt_push_lang\" to Transifex \n" if defined $opt_push_lang;
 	}
 	
 #resource->update_tx_config
@@ -708,26 +776,76 @@ package Resource {
 		print Dumper $tx_cfg->{$section};	
 	}
 
+#resource->backup_git_po 
+	sub backup_git_po {
+		my $self =shift;
+		my $lang_po = $self->{lang_po_list};
+		for my $lang ( keys $lang_po ){
+			my ($git_po,$trans_po ) = @{ $lang_po->{$lang} };
+			qx(cp $git_po $git_po.b 2>/dev/null);
+		}
+	}
+
+#resource->po_change_stat 
+	sub po_change_stat {
+		my $self =shift;
+		my $lang_po = $self->{lang_po_list};
+		my @po_need_git_add;
+		for my $lang ( keys $lang_po ){
+			my ($git_po,$trans_po ) = @{ $lang_po->{$lang} };
+
+			if ( -f $git_po ){
+				my $po_diff = qx(po_diff -s -o $git_po.b -n $git_po);
+				chomp $po_diff;
+				if ( $po_diff ne '' ){
+					push @po_need_git_add, $git_po;
+					print "[ $lang ]\n";
+					print $po_diff . "\n";
+				}
+
+			}
+		}
+		return \@po_need_git_add;
+	}
+#resource->merge_po_git_with_transifex
+	sub merge_po_git_with_transifex {
+		my $self = shift;
+		#my @po_files = values $self->{lang_po_list};
+		my $lang_po = $self->{lang_po_list};
+		main::debug("merge po git with transifex \nSkip merge zh_CN from transifex , only use git ,only push to transifex.\n");
+		for my $lang ( keys $lang_po ){
+			next if $lang eq 'zh_CN';
+			my ($git_po,$trans_po ) = @{ $lang_po->{$lang} };
+				main::debug("trans_po: $trans_po\ngit_po: $git_po\n");
+
+			if ( ! -f $trans_po ) {
+				warn "WARNING : merge_po_git_with_transifex : file `$git_po` not have trans version.\n";
+			} elsif ( ( -f $trans_po ) && (! -f $git_po) ) {
+				$git_po = $trans_po =~ s/^$TRANS_DIR/$GIT_REPO_DIR/r;
+				main::debug("\$ cp '$trans_po' '$git_po' \n");	
+				qx(cp '$trans_po' '$git_po');
+			} else {
+				qx(msgmerge -s '$trans_po' '$git_po' > '$git_po.o' 2>/dev/null);
+				main::debug("\$ mv '$git_po.o' '$git_po' \n");
+				qx(mv '$git_po.o' '$git_po')
+			}
+
+		}
+		
+	}
 
 #resource->merge_po_with_pot
 	sub merge_po_with_pot {
+		print "merge po with pot\n";
 		my $self = shift;
-		my @po_files = values $self->{lang_po_list};
 		my $pot = $self->{pot_file};
 
 		my $lang_po = $self->{lang_po_list};
 		for my $lang ( keys $lang_po ){
-			my $po = $lang_po->{$lang};
-			qx(msgmerge -s -U  '$po' '$pot' 2>/dev/null );			
+			my $git_po = @{ $lang_po->{$lang} }[0];
+			next if $git_po eq '';
+			qx(msgmerge -s -U  '$git_po' '$pot' 2>/dev/null );			
 
-			# check zh_CN more carefully	
-			my $careful_lang = 'zh_CN';
-			if ( $lang eq $careful_lang ){
-				my ( $trans , $untrans) = main::msgstat($po);
-				if ( $untrans != 0 ){
-					system "zenity --info --text='lang $careful_lang not translated over' &";	
-				}
-			}
 		}
 		
 	}
@@ -736,6 +854,7 @@ package Resource {
 	sub update_pot_file {
 
  		my $self = shift;
+		my $project_root = $self->{project_root};
 		my $pot_file = $self->{pot_file};
 		#backup pot file
 		qx(mv $pot_file $pot_file.save ; touch $pot_file);
@@ -746,8 +865,8 @@ package Resource {
 #	Generate ts file
 		if ( $ts_file ne '' ){
 			main::debug("Generate ts file : $ts_file\n");
-			my $project_root = $GIT_REPO_DIR.'/'.$self->{dir_name};
-			system "/usr/lib/x86_64-linux-gnu/qt5/bin/deepin-lupdate -recursive $project_root -ts $ts_file";
+			my $deepin_lupdate = "/usr/lib/x86_64-linux-gnu/qt5/bin/deepin-lupdate";	
+			system "$deepin_lupdate -recursive $self->{project_root} -ts $ts_file";
 			
 			main::debug("Covert ts to pot.\n");
 			open my $lconvert_pipe, "lconvert -i $ts_file -of pot |";
@@ -763,12 +882,17 @@ package Resource {
 
 
 		main::debug("\nwrite pot file : `$pot_file`\n" );
+		main::debug("project root : $project_root\n");
+		chdir $project_root or die "can't chdir to `$project_root` [ $! ]";
 		for my $option ( sort keys %$sf_list ){	
-			open my $xgettext , "|xgettext $option --no-location --from-code=utf-8 -s -j -f - -o $pot_file 2>/dev/null"
+
+			# write more clear pot file
+			open my $xgettext , "|xgettext $option  --from-code=utf-8 -s -j -f - -o $pot_file 2>/dev/null"
 				or die "error $!";
 			for my $f ( @{ $$sf_list{$option} } ) {
-					say $xgettext $f;
-					main::debug("source file: $f\n");
+					my $rel_path = File::Spec->canonpath( File::Spec->abs2rel( $f,$project_root ) );
+					say $xgettext $rel_path;
+					main::debug("source file: $rel_path\n");
 			}
 			close $xgettext
 		}
@@ -795,9 +919,7 @@ package Resource {
 #resource->update_locale_config_ini
 	sub update_locale_config_ini {
 		my $self = shift;
-
 		my $locale_config_file = $self->{data}{locale_config};
-
 		if ( defined $locale_config_file ){
 			$locale_config_file =~ s/<project_root>/$self->{project_root}/;
 			if ( ! -f $locale_config_file ) {
@@ -838,6 +960,7 @@ package Resource {
 		my $tools_dir = dirname $locale_config_file;
 		if ( -x -f "$tools_dir/$generate_mo_script" ) {
 			chdir $tools_dir;
+			print "\$ ./$generate_mo_script\n";
 			system "./$generate_mo_script";
 		}
 	}
@@ -846,11 +969,15 @@ package Resource {
 	sub list_po_file {
 		my $self = shift;
 		my $ref_po_file_list = $self->{lang_po_list};
-		say "resource name: $self->{project_name}.$self->{resource_name}" ;
+		print "resource name: $self->{project_name}.$self->{resource_name}\n" ;
 		for ( sort keys $ref_po_file_list ){
-			say "$_  \t" . $ref_po_file_list->{$_} ;
+			my $po_list = $ref_po_file_list->{$_};
+			my $git_po = $po_list->[0]; 
+			my $trans_po = $po_list->[1];
+			$git_po = "(git po not exists)" if $git_po eq '';
+			$trans_po = "(trans po not exists)" if $trans_po eq '';
+			print "[ $_ ]\n" . $git_po  . "\n" . $trans_po . "\n";
 		}
-		print "\n";
 
 	}
 
@@ -866,28 +993,38 @@ package Resource {
 			}
 		}
 	}
-
+	
+	sub process_regex {
+		my ($r,$project_root) = @_;
+		$r =~ s/<project_root>/$project_root/;
+		$r =~ s#\<\*\>#[^/]+#g;
+		$r =~ s#\<\=\>#.+#g;
+		print "regex $r\n";
+		return $r;
+	}
 #resource->source_file_list
 	sub source_file_list {
 		my $self = shift;
-		my @keys = keys $self->{data};
-
 		my $project_root = $self->{project_root};
 		my @file_list = qx(find $project_root );
 		@file_list = map { chomp $_; $_ } @file_list;
 
 		my %regex_list;
-		@keys = grep { /^source_file_regex(|\[.*\])$/ } @keys;
-
-		for ( @keys ){
+		my @regex_keys = grep { /^source_file_regex(|\[.*\])$/ } keys $self->{data};
+		my @ex_regex_keys = grep { /^exclude_source_file_regex(|\[.*\])$/ } keys $self->{data};
+		my @ex_regexs;
+		for ( @ex_regex_keys ){
+			my $ex_regex = process_regex($self->{data}{$_} , $project_root );
+			push @ex_regexs , $ex_regex;
+		}
+		for ( @regex_keys ){
 			my $option;
 			if ( /^source_file_regex\[[^:]*:(.*)\]$/ ){
 				$option = $1;
 			} else {
 				$option = "-k_";
 			}
-			my $regex = $self->{data}{$_};
-			$regex =~ s/<project_root>/$project_root/;
+			my $regex = process_regex( $self->{data}{$_} , $project_root );
 			push @{ $regex_list{$option} }, $regex;
 		}
 	
@@ -896,7 +1033,9 @@ package Resource {
 			for my $f ( @file_list ){
 				my $ref_regexs = $regex_list{$option};
 				if ( any { $f =~ /$_/ } @$ref_regexs ){
-					push @{ $source_file_list{$option} } , $f;
+					unless ( any { $f =~ /$_/ } @ex_regexs ){
+						push @{ $source_file_list{"$option"} } , $f;
+					}
 				}
 			}
 			
@@ -904,16 +1043,22 @@ package Resource {
 		return \%source_file_list;
 	}
 
+#resource->po_statistics
 	sub po_statistics {
 		my $self = shift;
 		my $ref_po_files = $self->{lang_po_list};
 		my %po_stat;
+		
 		for ( sort keys %{ $ref_po_files } ){
-			my ($lang,$file) = ($_ , $$ref_po_files{$_} );
+			my $git_po = @{ $ref_po_files->{$_} }[0];
+			next if $git_po eq '';
+			my ($lang,$file) = ($_ , $git_po );
 
 			main::debug( "--- LANG = $lang \n" );
 			$po_stat{$lang} = [ main::msgstat($file) ];
 		}
+
+		$po_stat{info} = $self->{project_name} .".". $self->{resource_name};
 		return \%po_stat;
 	}
 
@@ -939,16 +1084,31 @@ sub msgstat {
 sub print_stat {
 	my $ref_po_stat = shift;
 	my $n =0;
+
+	#print head
+	print "Stat Of Resource: " . $ref_po_stat->{info} ."\n";
 	for my $lang ( sort keys %{ $ref_po_stat } ){
+		next if $lang eq 'info';
 		my $ref_arr = $$ref_po_stat{$lang};
 		my $trans = $ref_arr->[0]; 
 		my $untrans =  $ref_arr->[1];
 		my $total = $trans + $untrans;
-		my $per  = $trans / $total; 
-		$per = sprintf '%.1f', 100 * $per;
+		my $per;
+		if ( $total != 0 ) {
+			$per  = $trans / $total; 
+		} else {
+			$per = 0;
+		};
+		debug("\ntrans = $trans,untrans = $untrans , total = $total\n");
+		$per = sprintf '%d', 100 * $per;
 		$n++;
-		print "\e[38;5;136;1m$lang\t\e[38;5;118;2m$trans/$untrans\t\e[38;5;123;2m$per%\t\e[0m";
+		print "\e[38;5;136;1m$lang\t\e[38;5;118;2m$trans/$untrans\t\e[38;5;123;2m$per\t\e[0m";
 		print "\n" if $n % 2 == 0; 
+
+		if ( $lang eq $CAREFUL_LANG && $untrans != 0 ){
+			system "zenity --info --text='lang [ $CAREFUL_LANG ] not translated completed !\n" .
+			"trans = $trans, untrans = $untrans , total = $total' 2>/dev/null &";	
+		}
 	}
 	print "\n" if $n % 2;
 }
