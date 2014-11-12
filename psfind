@@ -2,248 +2,89 @@
 use strict;
 use warnings;
 use 5.14.2;
-use Term::ReadKey;
-use File::Basename;
-use Config::File;
+use Curses::UI;
 use Getopt::Std;
 my %opts;
-my $g_cols = 0;
-getopts "hk:" , \%opts;
-
-my $CONFIG_FILE_PATH = "$ENV{HOME}/.config/psfind";
-my $default_config =  
-"keymap_theme=jk
-
-up[ik]=i
-down[ik]=k
-mark[ik]=s
-kill[ik]=d
-quit[ik]=q
-
-up[jk]=k
-down[jk]=j
-mark[jk]=m
-kill[jk]=d
-quit[jk]=q
-";
-
-
-if ( ! -f -r $CONFIG_FILE_PATH ){
-	write_config_file();
-}
-my $cfg = Config::File::read_config_file( "$ENV{HOME}/.config/psfind" );
-my %keymap;
-my $keymap_theme = $cfg->{keymap_theme} ;
-my $default_keymap_theme = "jk";
-my @available_keymap_themes = keys $cfg->{up};
-for (qw(up down mark kill quit) ) {
-	if ( ! defined $cfg->{$_}{$keymap_theme} ) {
-		say "\e[38;5;196m Warnning : config error \e[0m";
-		$keymap_theme = $default_keymap_theme;
-	}
-	$keymap{$_} = $cfg->{$_}{$keymap_theme};
-}
-
-if ( $opts{k} ) {
-	change_keymap_theme($opts{k});
-	exit;	
-}
-
+getopts "h" , \%opts;
 if ( $opts{h} or ! defined $ARGV[0] ) {
 	help_message();
-	exit;
 }
-
-my @items;
-my $key;
-my %selected;
-my $cur = 0;
-my @selected_pid;
 
 my @pids = qx(pgrep -f $ARGV[0]);
 @pids = map { chomp;$_} @pids;
+
+
 my $pids_str = join ",", @pids;
+my %pid_dict;
+my %listbox_labels;
+my @listbox_values;
 for ( qx(ps h -p '$pids_str' -o uid,pid,cmd) ){
-	my @cmd = split ' ';
+	chomp;
+	my ($uid,$pid,$cmd)	= split ' ',$_,3;
+	next if $cmd =~ /perl.*psfind/;
 
-	my $uid = shift @cmd;
-	my $pid = shift @cmd;
-	my $cmd = join " " , @cmd;
-	next if  $cmd =~ m{perl.*psfind} ;
-	my $i = [$uid,$pid,$cmd];
-	push @items,$i;	
+	push @listbox_values, $pid;
+	$pid_dict{$pid} = [$uid,$cmd];
+	$listbox_labels{$pid} = "$uid $pid $cmd";
 }
 
-#define color
-my $selected_cur_color="\e[38;5;196;1;48;5;234m";
-my $selected_color="\e[38;5;196m";
-my $cur_color="\e[38;5;118;1;48;5;234m";
-my $end_color="\e[0m";
-
-if ( $ENV{TERM} ne "xterm" ) {
-	#in tty
-	$selected_cur_color="\033[01;31;47m";
-	$selected_color="\033[01;31m";
-	$cur_color="\033[01;34;47m";
-	$end_color="\033[00m";
+if (0 == @listbox_values){
+	print "No result\n";
+	exit;
 }
+my $cui = Curses::UI->new( -color_support => 1 );
+my $win = $cui->add('window_id','Window');
 
-main_loop();
+$win->add(
+	'mylabel','Label',
+	-text => 'psfind (q Quit , d Done)',
+	-bold => 1,
+	-y => 0,
+);
 
-sub truncate_str {
-	my ($str, $cutoff , $marker) = @_;
-	if ( length($str) > $cutoff ){
-		$str = substr( $str, 0 , $cutoff - length($marker) ) . $marker;
-	}
-	return $str ;
-}
+my %listbox_selected;
+%listbox_selected = ( 0 => 1 ) if 1 == @listbox_values;
 
-sub change_keymap_theme {
-	my $new_theme = shift;
-	my @matched = grep { $_ eq $new_theme } @available_keymap_themes;
-	if ( !@matched ){
-		say "Failed to change keymap themes to `$new_theme`.\n". 
-			"Available keymap themes: ". join ", ", @available_keymap_themes;
-		return
-	}
-	qx(sed -i 's/keymap_theme=.*/keymap_theme=$new_theme/' $CONFIG_FILE_PATH);
-	say "change keymap themes to `$new_theme`";
-}
+my $listbox = $win->add(
+	'mylistbox', 'Listbox',
+	-y => 1,
+	-values => \@listbox_values,
+	-labels => \%listbox_labels, 
+	-multi => 1,
+	-selected => \%listbox_selected, 
+);
+
+$cui->set_binding( sub { $cui->mainloopExit }  , "q" ); 
+$cui->set_binding( \&kill_selected , "d" ); 
+
+$listbox->focus();
+
+
+$cui->mainloop;
+
 
 sub help_message {
-	my $themes = join ", ", @available_keymap_themes;
-	say basename $0 . " \${keyword}
-  $keymap{up},$keymap{down}\tMove up,down
-  $keymap{mark}\tMark to kill
-  $keymap{kill}\tKill
-  $keymap{quit}\tQuit
+	say "
+  k\tUp
+  j\tDown
+  Space\tMark
+  d\tKill
+  q\tQuit
 
 Options:
- -h\tShow help
- -k\t\${theme} Change keymap theme 
-Current keymap theme: $keymap_theme
-Available keymap themes: $themes";
+ -h\tShow help";
+ exit;
 }
-
-sub write_config_file {
-	open my $config_fh , '>' , $CONFIG_FILE_PATH
-		or die "can't open file `$CONFIG_FILE_PATH` for writing.";
-	print $config_fh $default_config;
-	close $config_fh;
-}
-
-sub main_loop {
-	if ( 0 == @items ) {
-		say "No result";
-		exit;
-	} elsif ( 1 == @items ) {
-		trigger_mark();
-	}
-
-	clear_screen();
-	print_ui();
-	ReadMode 3;
-	while ( $key = ReadKey(0) ){
-		process_key($key);
-	}
-}
-
-sub process_key {
-	my $key = $_[0];
-	if ( $key eq $keymap{up} ) {
-		up();
-	} elsif ( $key eq $keymap{down} ) {
-		down();
-	} elsif ( $key eq $keymap{mark} ) {
-		trigger_mark();
-	} elsif ( $key eq $keymap{quit} ) {
-		exit;
-	} elsif ( $key eq $keymap{kill} ) {
-		kill_selected();
-	}
-	clear_screen();
-	print_ui();
-}
-
-sub print_ui {
-	
-	my $cols = `tput cols`;
-	chomp $cols;
-	my $line;
-	for ( 0 .. @items-1 ) {	
-		my $i = $items[$_];
-		my $pid = @{$i}[1];
-		my $status = $selected{$pid} // 0;
-		$line = truncate_str(join( " ", @$i ) , $cols, "►");
-		if ( $status == 1 ){
-			#selected and cur
-			if ( $_ == $cur ) {
-				say "$selected_cur_color$line$end_color";
-			#selected and not cur
-			} else {
-				say "$selected_color$line$end_color";
-
-			}
-		#not selected and cur
-		} elsif ( $_ == $cur ) {	
-			say "$cur_color$line$end_color";
-		#common
-		} else {
-			say $line;
-		}
-	}
-
-	#if be truncated
-	if ( $line =~ /►$/ ){
-		my $cur_cmd = @{ $items[$cur] }[2];
-		say "_" x $cols . "\n$cur_cmd";
-	}
-}
-
-END {
-	ReadMode 0;
-}
-
-sub up {
-	if ( $cur > 0 ){
-		$cur--;
-	} else {
-		$cur = @items - 1;
-	}
-}
-
-sub down {
-	if ( $cur < @items - 1 ){
-		$cur++;
-	} else {
-		$cur = 0;
-	}
-}
-
-sub trigger_mark {
-	my $i = $items[$cur];
-	my $pid = @{ $i }[1];
-	if ( $selected{$pid}  == 1 ) {
-		$selected{ $pid } = 0;
-	} else {
-		$selected{ $pid } = 1;
-	}
-	@selected_pid = grep { $selected{$_} == 1  } keys %selected;
-}
-
-
-sub clear_screen {	
-	print "\033c";
-}
-
 
 sub kill_selected {
-	for ( @selected_pid ){
-		system "kill $_";
-		say "KILL $_  ($?)";
-		if ( 0 != $? ) {
-			system "sudo kill $_";
+	for ( $listbox->get ){
+		my ($uid,$cmd) = @{ $pid_dict{$_} };
+		if ($uid != $<){
+			system "gksu kill $_";
+		} else {
+			system "kill $_";
 		}
 	}
 	exit;
 }
+

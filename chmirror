@@ -1,0 +1,180 @@
+#!/usr/bin/perl -w
+use 5.12.0;
+use Getopt::Std;
+use File::Basename;
+my $APT_SOURCE_LIST = "/etc/apt/sources.list";
+my $MIRROR_INI_DIR = "/usr/share/deepin-software-center/mirrors";
+
+my $CODENAME;
+my $lsbr_fpath = "/etc/lsb-release";
+open my $lsbr,'<', $lsbr_fpath
+	or die "Can't open file `$lsbr_fpath` $!";
+foreach ( <$lsbr> ) {
+	chomp;
+	if (/DISTRIB_CODENAME=(.*)/){
+		$CODENAME= $1;
+	} 
+}
+close $lsbr;
+
+die "Can't get CODENAME from $lsbr_fpath" unless defined $CODENAME;
+
+my $debug_mode = ( defined $ENV{DEBUG} && $ENV{DEBUG} eq '1' ) ? 1 : 0;
+
+sub debug {
+	say STDERR "[DEBUG]  " . shift if $debug_mode; 
+}
+
+
+package Mirror {
+	sub new {
+		my ($class) = @_;
+		return bless {
+			text => "#Modifier: $0\n",
+			ubuntu => '',
+			deepin => '',
+			name => '',
+		} , $class;
+	}
+	sub add_mirror {
+		my $self = shift;
+		my @mirror = @_;
+		foreach my $m ( @mirror ) {
+			$self->{text} .= "deb $m\ndeb-src $m\n"
+		}
+		
+		main::debug("self text\n". $self->{text});
+			
+	}
+
+	sub set_name {
+		my ($self,$name) = @_;
+		$self->{name} = $name;
+	}
+
+	sub set_ubuntu {
+		my ($self, $url) = @_;
+		$self->{ubuntu} = $url;
+		$self->add_mirror(
+		"$url $CODENAME main restricted universe multiverse",
+		"$url $CODENAME-updates main restricted universe multiverse",
+		"$url $CODENAME-security main restricted universe multiverse",
+		);
+	}
+
+	sub set_deepin {
+		my ($self, $url) = @_;
+		$self->{deepin} = $url;
+		$self->add_mirror("$url $CODENAME main universe non-free");
+	
+	}
+
+	sub text {
+		my $self = shift;
+
+		return $self->{text} .
+		"\n#Name: " . $self->{name} .
+		"\n#Deepin: ". $self->{deepin} .
+		"\n#Ubuntu: ". $self->{ubuntu} . "\n";
+	}
+
+	sub save {
+		my $self = shift;
+		open my $tee , "| sudo tee $APT_SOURCE_LIST" or die "Can't open write pipe $!";
+		print $tee $self->text;
+		close $tee;
+	}
+
+}
+
+sub dsc_mirror {
+	my $mirror_ini_path = shift;
+	my $m = Mirror->new;
+	if ( ! -f $mirror_ini_path ){
+		$mirror_ini_path = "$MIRROR_INI_DIR/" . basename( $mirror_ini_path );
+		if ( ! -f $mirror_ini_path ) {
+			die "Can't find file `$mirror_ini_path`";
+		}
+	}
+
+	open CFG ,'<', $mirror_ini_path;
+	my $cfg_deepin_url;
+	my $cfg_ubuntu_url;
+	my $cfg_name_zhcn;
+	my $cfg_name_enus;
+
+	while (<CFG>){
+		if (/^\s*deepin_url\s*=\s*(.*)\n/){
+			$cfg_deepin_url = $1;	
+			next;
+		} 
+		if (/^\s*ubuntu_url\s*=\s*(.*)\n/){
+			$cfg_ubuntu_url = $1;	
+			next;
+		} 
+		if (/^\s*name\[en_US\]\s*=\s*(.*)\n/){
+			$cfg_name_enus = $1;	
+			next;
+		} 
+		if (/^\s*name\[zh_CN\]\s*=\s*(.*)\n/){
+			$cfg_name_zhcn = $1;	
+			next;
+		} 
+	}
+
+	close CFG;
+
+	my $name = $cfg_name_zhcn // $cfg_name_enus;
+	$m->set_name( "DSC_Mirror $name" );
+	$m->set_deepin($cfg_deepin_url);
+	$m->set_ubuntu($cfg_ubuntu_url);
+	return $m;
+}
+
+sub help {
+	print 
+"Options:
+-t [or;hb;pr]
+-m [dsc mirror]
+-h help
+
+option -t :
+or = Original
+hb = Hourly Build
+pr = PreRelease
+";
+	exit 0;
+}
+
+# MAIN
+my %opt;
+getopt 'lhm:t:', \%opt;
+if (exists $opt{l}) {
+	exec "ls","--color=auto", $MIRROR_INI_DIR;
+}
+elsif (exists $opt{h} ){
+	help;
+}
+elsif ($opt{m}){
+	dsc_mirror( $opt{m} )->save;
+}
+elsif (exists $opt{t} ){
+	my $m = Mirror->new;
+	if ($opt{t} eq 'pr') {
+		$m->set_name("PreRelease");
+		$m->set_deepin("http://packages.corp.linuxdeepin.com/deepin"); 
+		$m->set_ubuntu("http://packages.linuxdeepin.com/ubuntu");
+	}
+	elsif ($opt{t} eq 'hb'){
+		$m->set_name("Hourly Build");
+		$m->set_deepin("http://packages.corp.linuxdeepin.com/deepin"); 
+		$m->set_ubuntu("http://packages.linuxdeepin.com/ubuntu");
+		$m->add_mirror("http://packages.corp.linuxdeepin.com/hourly-build $CODENAME main");
+	}
+	elsif ($opt{t} eq 'or'){
+		#original
+		$m = dsc_mirror( "packages.linuxdeepin.com.ini" )
+	} else { help }
+	$m->save;
+}
+else { help } 
