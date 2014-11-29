@@ -1,0 +1,289 @@
+#!/usr/bin/env perl 
+use 5.018;
+use warnings;
+use Data::Dumper;
+use LWP::UserAgent;
+use JSON;
+use File::Basename;
+use List::Util qw(first);
+use File::Temp qw(tempdir);
+use URI::Escape;
+
+my $debug;
+$debug = 1 if exists $ENV{DEBUG} && $ENV{DEBUG} eq '1';
+
+my $ua = LWP::UserAgent->new;
+$ua->agent("Cltest/0.1");
+my $cltest_previous_fpath = "$ENV{HOME}/.config/cltest_previous";
+
+sub get_deb_urls {
+	my $url = shift;
+	my $resp = $ua->get($url);
+	if ( $resp->is_success ){
+		$_ = $resp->decoded_content;
+		return map { $url . $_ } /href="(\S+\.deb)">/sg;
+	}
+	else {
+		die "get_deb_urls: url= $url ", $resp->status_line;
+	}
+}
+
+sub get_detail_json {
+	my $cl_num = shift;
+    my $url = "http://121.40.93.113:8080/changes/$cl_num/detail";
+	my $resp = $ua->get($url);
+	if ($resp->is_success ){
+		$_ = $resp->decoded_content;
+		print $_ if $debug;
+		s/^.*\n//;
+		return decode_json($_);
+	}
+	else {
+		die "get_detail_json : url = $url ",$resp->status_line;
+	}
+}
+
+
+sub get_change_info {
+	my $detail = shift;
+    my $messages = $detail->{messages};
+	my @jenkins_messages = map { $_->{message} } ( grep { $_->{author}{name} eq 'jenkins' } @$messages);
+	my @urls;
+	for my $msg ( @jenkins_messages ){
+		if ( $msg =~ /Patch Set (\d+)/ ){
+			my $num = $1;
+			if ( my %url_status = $msg =~ m{(http://\S+-ci/\S+).+(SUCCESS|FAILURE)}g ){
+				for my $url (keys %url_status){
+					next if $url =~ /-mxe-ci/;
+					push @urls , [$num , $url , $url_status{ $url } ];
+				}
+			}
+		}
+	}
+	
+	return ChangeInfo->new(
+		urls => \@urls ,
+		status => $detail->{status},
+		subject => $detail->{subject},
+		owner => $detail->{owner}{name},
+		num => $detail->{_number}
+	);
+}
+
+sub install_cl {
+	my $cl_num = shift;
+	my $info = get_change_info( get_detail_json( $cl_num ) );
+	
+	$info->print_head;
+
+	my $urls = $info->{urls};
+	die "Not found any patchset" unless @$urls;
+	#newest
+	my ($num,$url,$status) = @{$urls->[-1] };
+
+	say "$status $num $url";
+	die "last patchset $num build $status" if $status ne 'SUCCESS';
+	my $pkgs = install_deb( get_deb_urls($url) );
+	$info->{packages} = $pkgs;	
+	return $info;
+}
+
+sub install_cls {
+	my @infos = map { install_cl($_) } @_;
+    install_previous( @infos);
+	save_previous_packages( @infos );
+}
+
+sub install_deb {
+	my @pkgs;
+	for my $url ( @_ ){
+		my $tmp_deb = "/tmp/cltest.deb";
+		my $pkg = basename uri_unescape($url);
+		my $name = $pkg =~ s/_.+$//r;
+		if ( ! $debug ) {
+			say $url;
+			qx(wget -q '$url' -O $tmp_deb);
+			die "install_deb: wget error($?), url=$url " if $?;
+			say "\e[38;5;3mInstall $name\e[0m";
+			system "sudo dpkg --force-all -i  $tmp_deb >/dev/null";
+			die "install_deb : dpkg error($?) " if $?;
+		
+		}
+
+		push @pkgs, $pkg;
+	}
+	return \@pkgs;
+}
+
+
+sub save_previous_packages {
+	my @infos = @_;
+	open LOG , '>' , $cltest_previous_fpath;
+	print LOG $_->message for @infos;
+	close LOG;
+}
+
+sub get_previous {
+	open LOG , '<',$cltest_previous_fpath;
+	my @pkgs;
+	while (<LOG>){
+		if ( /^@ (.*)\n$/ ){
+			push @pkgs, (split /\s+/, $1);
+		}
+	}
+	close LOG;
+	return @pkgs;
+}
+
+sub install_previous {
+	my @infos = @_;
+	my @pkgs;
+	for ( @infos ){
+		push @pkgs, @{ $_->{packages} };
+	}
+	my @restore;
+	for my $pre ( get_previous() ){
+
+		my $pre_pkgname = $pre =~ s/_.+$//r;
+		my @pkgnames = map { s/_.+$//r } @pkgs;
+		if (! first { $pre_pkgname eq $_ } @pkgnames ){
+			push @restore, $pre;
+		}
+	}
+	restore_pkg( @restore );
+}
+
+sub restore_pkg {
+	my @pkgs = @_;
+	my $installed_version = get_installed_version( @pkgs );
+	my %pkg_vers = 
+		map { my ($name,$ver) = split /_/ ; $name => $ver } @pkgs;
+
+	if ($debug){
+		print Dumper \%pkg_vers;
+		print Dumper $installed_version;
+	}
+
+	my @need_reinstall = grep {
+		$pkg_vers{$_} eq $installed_version->{$_} 
+		} keys %pkg_vers;
+	
+	reinstall_pkg( @need_reinstall );
+}
+
+sub reinstall_pkg {
+	my $cache_dir = "/var/cache/apt/archives";
+	my @pkg = @_;
+	for ( @pkg ){
+		my @caches = <$cache_dir/$_*.deb>;
+
+		my $deb_fpath;
+		if ( @caches ){
+			$deb_fpath = $caches[-1];
+		}
+		else {
+			#try apt-get download one
+			my $tmpdir = tempdir( CLEAN_UP => 1 );		
+			chdir $tmpdir;
+			qx(apt-get download $_);
+			$deb_fpath = (<$tmpdir/$_*.deb>)[-1]
+				or die "apt-get download not found deb $_ , you should run apt-get update";
+		}
+
+		#dpkg force install
+		say "\e[38;5;9mRestore $_ \e[0m";
+		system "sudo dpkg --force-all -i '$deb_fpath' >/dev/null";
+		die "reinstall_pkg : dpkg error($?) when reinstall $_ " if $?;
+	}
+}
+
+sub get_installed_version {
+	my @pkgs = @_;
+	my @pkg_names = map { s/_.+$//r } @pkgs;
+	my %pkg_ver;
+	open DPKG_P , "dpkg -p @pkg_names 2>/dev/null |" or die $!;
+	my $ver_str;
+	while (<DPKG_P>){
+		if ( /^Package: (.*)\n$/ ){
+			my $package = $1;	
+			while ( <DPKG_P>){
+				if ( /^Version: (.*)\n$/){
+					my $version = $1;	
+					$pkg_ver{$package} = $version;
+					last;
+				}	
+			
+			}
+		}
+	}
+
+	return \%pkg_ver;
+}
+
+sub print_status {
+	open LOG, '<', $cltest_previous_fpath
+		or exit 0;
+	print while <LOG>;
+	close LOG;
+	exit 0;
+}
+
+sub help {
+print "
+cltest [number...]
+apply cl ,like cltest 1000
+options:
+-r \t restore
+-s \t status
+-h \t help
+";
+exit;
+
+}
+
+
+my $first = $ARGV[0] // '-h';
+
+if ( $first eq '-h' ) {
+	help();
+}
+elsif ( $first eq '-s' ){
+	print_status();
+}
+elsif ( $first eq '-r'){
+	#restore
+    install_previous();
+	exit;
+}
+elsif ( $first eq '-a' ){
+	#add , not restore
+	#TODO
+}
+elsif ( $first =~ /\d+/ ) {
+	install_cls( @ARGV );
+}
+else {
+	help();
+}
+
+package ChangeInfo;
+sub new {
+	my $class = shift;
+	my %data = @_;
+	return bless \%data, $class;
+}
+
+sub message {
+	my $self = shift;
+    return sprintf "\n%d %s\n@ %s\nOwner: %s\nStatus: %s\n",
+		$self->{num} , $self->{subject},
+		(join " ", @{$self->{packages} }),
+		$self->{owner},
+		$self->{status};
+}
+
+sub print_head {
+	my $self = shift;
+    printf "\e[38;5;10m%s %s\nOwner: %s\nStatus: %s\e[0m\n",
+		$self->{num} , $self->{subject}, $self->{owner}, $self->{status};
+}
