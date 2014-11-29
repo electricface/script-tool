@@ -216,7 +216,8 @@ sub get_installed_version {
 			}
 		}
 	}
-
+	
+	close DPKG_P;
 	return \%pkg_ver;
 }
 
@@ -233,9 +234,9 @@ print "
 cltest [number...]
 apply cl ,like cltest 1000
 options:
--r \t restore
--s \t status
--h \t help
+-r	restore
+-s	status
+-h	help
 ";
 exit;
 
