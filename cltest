@@ -8,7 +8,9 @@ use File::Spec;
 use File::Temp qw(tempdir);
 use JSON;
 use LWP::UserAgent;
+#TODO use list::moreutils firstidx replace it
 use List::Util qw(first);
+use List::MoreUtils qw(uniq);
 use URI::Escape;
 
 my $debug;
@@ -17,7 +19,10 @@ $debug = 1 if exists $ENV{DEBUG} && $ENV{DEBUG} eq '1';
 my $CLTEST_CONFIG_DIR = "$ENV{HOME}/.config/cltest";
 qx(mkdir -p $CLTEST_CONFIG_DIR) if not -d $CLTEST_CONFIG_DIR;
 
-my $ua = LWP::UserAgent->new;
+my $ua = LWP::UserAgent->new(
+	ssl_opts => { verify_hostname => 0 }
+);
+
 $ua->agent("Cltest/0.1");
 my $cltest_previous_fpath = "$ENV{HOME}/.config/cltest_previous";
 
@@ -37,7 +42,7 @@ sub get_deb_urls
 sub get_detail_json
 {
 	my $cl_num = shift;
-    my $url = "http://121.40.93.113:8080/changes/$cl_num/detail";
+	my $url = "https://cr.deepin.io/changes/$cl_num/detail";
 	my $resp = $ua->get($url);
 	if ($resp->is_success ){
 		$_ = $resp->decoded_content;
@@ -53,7 +58,7 @@ sub get_detail_json
 sub get_change_info
 {
 	my $detail = shift;
-    my $messages = $detail->{messages};
+	my $messages = $detail->{messages};
 	my @jenkins_messages = map { $_->{message} } ( grep { $_->{author}{name} eq 'jenkins' } @$messages);
 	my @urls;
 	for my $msg ( @jenkins_messages )
@@ -61,7 +66,7 @@ sub get_change_info
 		if ( $msg =~ /Patch Set (\d+)/ )
 		{
 			my $num = $1;
-			if ( my %url_status = $msg =~ m{(http://\S+-ci/\S+).+(SUCCESS|FAILURE)}g )
+			if ( my %url_status = $msg =~ m{(https?://\S+-ci/\S+).+(SUCCESS|FAILURE)}g )
 			{
 				for my $url (keys %url_status)
 				{
@@ -104,7 +109,7 @@ sub install_cl
 	return $info;
 }
 
-sub install_cls 
+sub install_cls
 {
 	my @clnums = @_;
 	my @install_infos = map { install_cl($_) } @clnums;
@@ -116,7 +121,7 @@ sub install_cls
     restore_previous( @install_infos);
 }
 
-sub save_install_info 
+sub save_install_info
 {
 	my ($info , $pkg ) = @_;
 	my $cl_num = $info->{num};
@@ -244,7 +249,7 @@ sub get_previous {
 		if ($print_status)
 		{
 			push @msg, $pkg . "\n";
-			push @msg,$_ for <INFO> 
+			push @msg,$_ for <INFO>
 		}
 		close INFO;
 
@@ -425,7 +430,7 @@ elsif ( $first eq '-a' )
 			push @clnums,$1;
 		}
 	}
-	install_cl($_) for @clnums;
+	install_cl($_) for uniq(@clnums);
 }
 else
 {
