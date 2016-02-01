@@ -2,6 +2,7 @@
 use 5.018;
 use warnings;
 use Data::Dumper;
+use Data::Dump qw(pp);
 use File::Basename;
 use File::Slurp;
 use File::Spec;
@@ -66,8 +67,10 @@ sub get_change_info
 		if ( $msg =~ /Patch Set (\d+)/ )
 		{
 			my $num = $1;
-			if ( my %url_status = $msg =~ m{(https?://\S+-ci/\S+).+(SUCCESS|FAILURE)}g )
+			warn "<<< msg: $msg >>>";
+			if ( my %url_status = $msg =~ m{(https?://\S+).+(SUCCESS|FAILURE)}g )
 			{
+				warn "url status: ", pp (%url_status);
 				for my $url (keys %url_status)
 				{
 					next if $url =~ /-mxe-ci/;
@@ -143,17 +146,18 @@ sub install_deb {
 	for my $url ( @urls ){
 		my $tmp_deb = "/tmp/cltest.deb";
 		my $pkg = basename uri_unescape($url);
-		# $pkg like dde-daemon_0.0-gerrit+1953-2_amd64.deb
+		# $pkg like dde-daemon_2.99+10655~4_amd64.deb
 		my ($pkgname , $ver ) = split /_/, $pkg ,2;
 		my ($cl_num, $patch_num);
-		if ( $ver =~ /gerrit\+(\d+)-(\d+)/ ){
+		if ( $ver =~ m/\+(\d+)~(\d+)/ ){
 			$cl_num = $1;
 			$patch_num = $2;
 		}
 		else {
 			$cl_num = $patch_num = 0;
-			warn "not found str 'gerrit' in $ver\n";
+			# warn "not found str 'gerrit' in $ver\n";
 		}
+		warn "cl $cl_num patch $patch_num";
 
 		say $url;
 		my $wget_output = qx(wget -nv '$url' -O $tmp_deb 2>&1 );
@@ -291,7 +295,7 @@ sub restore_previous {
 	my %restore;
 
 	my $previous_infofile_pkgs =  get_previous();
-	
+
 	while ( my($infofile, $pre_pkg_ver) = each( %$previous_infofile_pkgs ) )
 	{
 		my $previous_pkgname = $pre_pkg_ver =~ s/_.+$//r;
@@ -354,7 +358,7 @@ sub get_installed_version
 	my $pkg_name = $pkg =~ s/_.+$//r;
 
 	say "get_installed_version ( $pkg )" if $debug;
-	open DPKG_P , "dpkg -p $pkg_name 2>/dev/null |" or die $!;
+	open DPKG_P , "dpkg --status $pkg_name 2>/dev/null |" or die $!;
 	my $version = "(null)";
 	while ( <DPKG_P>)
 	{
