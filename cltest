@@ -158,10 +158,16 @@ sub install_deb {
 			# warn "not found str 'gerrit' in $ver\n";
 		}
 		warn "cl $cl_num patch $patch_num";
+		warn "pkgname: $pkgname";
+		warn "url: $url";
 
-		say $url;
-		my $wget_output = qx(wget -nv '$url' -O $tmp_deb 2>&1 );
-		die "install_deb: wget error($?), url=$url ,wget output = $wget_output" if $?;
+		print "need install? (y/n)";
+		my $ask = <STDIN>;
+		next if $ask !~ /y/i;
+
+		system "wget -v '$url' -O $tmp_deb";
+		die "install_deb: wget error($?)" if $?;
+
 		say "\e[38;5;3mInstall $pkgname\e[0m";
 		change_deb_version( $tmp_deb, $cl_num , $patch_num );
 		system "sudo dpkg -i $tmp_deb >/dev/null";
@@ -204,6 +210,7 @@ sub change_deb_version {
 		$pkgname = $1;
 	};
 	my $new_version = get_new_version($pkgname, $cl_num , $patch_num );
+	return if ! defined $new_version;
 	say "package $pkgname new version: $new_version" if $debug;
 # change control version section
 	$control =~ s/Version:.*\n/Version: $new_version\n/;
@@ -228,8 +235,11 @@ sub get_new_version {
 			last;
 		}
 	}
-	die "Can't find candidate version for package `$pkgname` "
-		if not defined $candidate_ver;
+	if (! defined $candidate_ver) {
+	 	warn "Can't find candidate version for package `$pkgname` ";
+		return undef;
+	}
+
 	my ($ver_date) = split /~/,$candidate_ver,2;
 	my ($ver, $date) = split /\+/ , $ver_date,2;
 	$date--;
