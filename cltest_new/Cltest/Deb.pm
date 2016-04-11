@@ -226,6 +226,7 @@ sub append_lines {
 sub get_new_version {
     my $pkgname = $_[0];
     my @pkg_policy = qx(env LANGUAGE=en_US apt-cache policy $pkgname);
+    return undef unless @pkg_policy;
 
     my $installed_ver;
     my $candidate_ver;
