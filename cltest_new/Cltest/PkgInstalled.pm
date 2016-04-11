@@ -100,7 +100,7 @@ sub print_pkg_status {
 
 sub get_pkg_status {
     my $pkg = $_[0];
-    my $dpkg_status = qx(dpkg --status $pkg);
+    my $dpkg_status = qx(dpkg --status $pkg 2>/dev/null);
     my $control = Cltest::DebControlParser->read_string($dpkg_status);
     my $content = $control->{contents}[0];
     return unless defined $content;
