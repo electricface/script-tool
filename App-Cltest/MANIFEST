@@ -1,0 +1,11 @@
+bin/cltest.pl
+Changes
+lib/Cltest/ChangeInfo.pm
+lib/Cltest/Deb.pm
+lib/Cltest/DebControlParser.pm
+lib/Cltest/PatchsetBuildResult.pm
+lib/Cltest/PkgInstalled.pm
+lib/Cltest/Utils.pm
+Makefile.PL
+MANIFEST
+README

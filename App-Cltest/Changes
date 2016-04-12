@@ -1,0 +1,6 @@
+Revision history for Perl extension Cltest::Test.
+
+0.01  Mon Apr 11 22:54:10 2016
+	- original version; created by h2xs 1.23 with options
+		-AX --skip-exporter --use-new-tests -n Cltest::Test
+
