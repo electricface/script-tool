@@ -21,7 +21,6 @@ sub print_env {
     system("env")
 }
 
-# pid of dde-preload
 my $pid = shift;
 say "copy env from process $pid";
 
