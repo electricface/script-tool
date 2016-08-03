@@ -4,6 +4,7 @@ use strict;
 use 5.018;
 
 use Getopt::Std;
+use File::Path qw(make_path remove_tree);
 use Data::Dump qw(pp);
 
 my %opts;
@@ -111,8 +112,7 @@ sub install_plugin {
 
 sub uninstall_plugin {
     my $name = $_[0];
-    chdir $VIM_BUNDLE_DIR or die $!;
-    system "rm", "-rvf", $name;
+    remove_tree( "$VIM_BUNDLE_DIR/$name", { verbose => 1 } );
 }
 
 sub enable_plugin {
@@ -125,7 +125,7 @@ sub enable_plugin {
     }
     if ( -d $name ) {
         my $new_name = substr $name, 0, -1;
-        system "mv", $name, $new_name;
+        rename $name, $new_name or die $!;
         say "enable plugin $name";
     }
     else {
@@ -142,7 +142,7 @@ sub disable_plugin {
         return;
     }
     if ( -d $name ) {
-        system "mv", $name, "$name~";
+        rename $name, "$name~" or die $!;
         say "disable plugin $name";
     }
     else {
@@ -151,7 +151,7 @@ sub disable_plugin {
 }
 
 sub install_pathogen {
-    qx(mkdir -p $VIM_AUTOLOAD_DIR $VIM_BUNDLE_DIR);
+    make_path( $VIM_AUTOLOAD_DIR, $VIM_BUNDLE_DIR, { verbose => 1 } );
 
     #my $url = "https://tpo.pe/pathogen.vim";
     my $url =
