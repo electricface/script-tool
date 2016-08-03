@@ -11,8 +11,10 @@ getopts( "hli:u:e:d:U:S", \%opts );
 
 #warn "opts: ", pp(\%opts);
 
-my $VIM_DIR        = "$ENV{HOME}/.vim";
-my $VIM_BUNDLE_DIR = "$VIM_DIR/bundle";
+my $VIM_DIR          = "$ENV{HOME}/.vim";
+my $VIM_BUNDLE_DIR   = "$VIM_DIR/bundle";
+my $VIM_AUTOLOAD_DIR = "$VIM_DIR/autoload";
+my $PATHOGEN_VIM     = "$VIM_AUTOLOAD_DIR/pathogen.vim";
 
 #warn "VIM_BUNDLE_DIR:", $VIM_BUNDLE_DIR;
 
@@ -33,9 +35,13 @@ sub print_help {
     ";
 }
 
+sub has_pathogen {
+    -f $PATHOGEN_VIM;
+}
+
 MAIN: {
     # check pathogen.vim
-    if ( !-e "$VIM_DIR/autoload/pathogen.vim" ) {
+    if ( !has_pathogen() ) {
         say "pathogen not ok";
         install_pathogen();
     }
@@ -55,7 +61,6 @@ MAIN: {
     }
     elsif ( defined $opts{d} ) {
         disable_plugin( $opts{d} );
-        exit;
     }
     elsif ( defined $opts{e} ) {
         enable_plugin( $opts{e} );
@@ -146,10 +151,13 @@ sub disable_plugin {
 }
 
 sub install_pathogen {
-    qx(mkdir -p ~/.vim/autoload ~/.vim/bundle);
-    my $url = "https://tpo.pe/pathogen.vim";
-    system "curl -# -L -o ~/.vim/autoload/pathogen.vim $url";
-    if ( $? == 0 ) {
+    qx(mkdir -p $VIM_AUTOLOAD_DIR $VIM_BUNDLE_DIR);
+
+    #my $url = "https://tpo.pe/pathogen.vim";
+    my $url =
+"https://raw.githubusercontent.com/tpope/vim-pathogen/master/autoload/pathogen.vim";
+    system "curl -# -L -o $PATHOGEN_VIM $url";
+    if ( $? == 0 && has_pathogen() ) {
         say "install_pathogen done";
     }
 }
