@@ -112,7 +112,11 @@ sub install_plugin {
     my $prompt = "Enter plugin new name: ";
     my $name   = $term->readline($prompt);
     warn "name: $name";
-    system "git", "clone", $git_uri, $name;
+    my @cmds = ( "git", "clone", $git_uri );
+    if ( defined $name && length($name) > 1 ) {
+        push @cmds, $name;
+    }
+    system @cmds;
 }
 
 sub uninstall_plugin {
