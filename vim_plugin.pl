@@ -6,6 +6,7 @@ use 5.018;
 use Getopt::Std;
 use File::Path qw(make_path remove_tree);
 use Data::Dump qw(pp);
+use Term::ReadLine;
 
 my %opts;
 getopts( "hli:u:e:d:U:S", \%opts );
@@ -16,6 +17,7 @@ my $VIM_DIR          = "$ENV{HOME}/.vim";
 my $VIM_BUNDLE_DIR   = "$VIM_DIR/bundle";
 my $VIM_AUTOLOAD_DIR = "$VIM_DIR/autoload";
 my $PATHOGEN_VIM     = "$VIM_AUTOLOAD_DIR/pathogen.vim";
+my $term             = Term::ReadLine->new('vim_plugin.pl');
 
 #warn "VIM_BUNDLE_DIR:", $VIM_BUNDLE_DIR;
 
@@ -107,7 +109,10 @@ sub list_plugins {
 sub install_plugin {
     my $git_uri = $_[0];
     chdir $VIM_BUNDLE_DIR or die $!;
-    system "git", "clone", $git_uri;
+    my $prompt = "Enter plugin new name: ";
+    my $name   = $term->readline($prompt);
+    warn "name: $name";
+    system "git", "clone", $git_uri, $name;
 }
 
 sub uninstall_plugin {
