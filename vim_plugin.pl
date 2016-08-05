@@ -99,11 +99,44 @@ sub get_plugins {
     return @names;
 }
 
+sub get_plugin_display_name {
+    my $name = $_[0];
+    if ( $name =~ /~$/ ) {
+        $name = substr $name, 0, -1;
+        $name .= "\t[disabled]";
+    }
+    return $name;
+}
+
 sub list_plugins {
     my @plugins = get_plugins();
+
+    my ( @colorscheme, @lang, @other );
+
     for my $p ( sort @plugins ) {
-        say "* $p";
+        if ( $p =~ /^colorscheme-/ ) {
+            push @colorscheme, $p;
+        }
+        elsif ( $p =~ /^lang-/ ) {
+            push @lang, $p;
+        }
+        else {
+            push @other, $p;
+        }
     }
+
+    for my $p (@other) {
+        say "* ", get_plugin_display_name($p);
+    }
+
+    for my $p (@colorscheme) {
+        say "% ", get_plugin_display_name($p);
+    }
+
+    for my $p (@lang) {
+        say "& ", get_plugin_display_name($p);
+    }
+
 }
 
 sub install_plugin {
