@@ -7,6 +7,7 @@ use Getopt::Std;
 use File::Path qw(make_path remove_tree);
 use Data::Dump qw(pp);
 use Term::ReadLine;
+use File::Basename qw(basename);
 
 my %opts;
 getopts( "hli:u:e:d:U:S", \%opts );
@@ -84,7 +85,7 @@ sub get_plugins {
     my @names;
 
     opendir( my $dh, $VIM_BUNDLE_DIR )
-      or die "can't opendir: $!";
+        or die "can't opendir: $!";
     while ( readdir $dh ) {
         if ( $_ =~ /^\./ ) {
             next;
@@ -139,17 +140,33 @@ sub list_plugins {
 
 }
 
+sub get_good_plugin_name {
+    my $name = $_[0];
+    $name =~ s/^vim-//;
+    $name =~ s/\.git$//;
+    $name =~ s/\.vim$//;
+    return $name;
+}
+
 sub install_plugin {
     my $git_uri = $_[0];
     chdir $VIM_BUNDLE_DIR or die $!;
     my $prompt = "Enter plugin new name: ";
-    my $name   = $term->readline($prompt);
-    warn "name: $name";
+    my $bname  = basename($git_uri);
+    $term->add_history($bname);
+    my $good_name = get_good_plugin_name($bname);
+    $term->add_history($good_name);
+    my $name = $term->readline($prompt);
     my @cmds = ( "git", "clone", $git_uri );
+
     if ( defined $name && length($name) > 1 ) {
         push @cmds, $name;
+        system @cmds;
     }
-    system @cmds;
+    else {
+        #system @cmds;
+        say "do nothing";
+    }
 }
 
 sub uninstall_plugin {
@@ -196,8 +213,8 @@ sub install_pathogen {
     make_path( $VIM_AUTOLOAD_DIR, $VIM_BUNDLE_DIR, { verbose => 1 } );
 
     #my $url = "https://tpo.pe/pathogen.vim";
-    my $url =
-"https://raw.githubusercontent.com/tpope/vim-pathogen/master/autoload/pathogen.vim";
+    my $url
+        = "https://raw.githubusercontent.com/tpope/vim-pathogen/master/autoload/pathogen.vim";
     system "curl -# -L -o $PATHOGEN_VIM $url";
     if ( $? == 0 && has_pathogen() ) {
         say "install_pathogen done";
@@ -246,4 +263,3 @@ sub save {
         say "git clone $git_uri $p";
     }
 }
-
