@@ -33,7 +33,7 @@ sub print_help {
 	-d disable <name>
 	-l list
 	-u update [name/all/enabled]
-	-S save
+	-S shell script
 
   about pathogen: https://github.com/tpope/vim-pathogen
     ";
@@ -73,7 +73,7 @@ MAIN: {
         update_plugin( $opts{u} );
     }
     elsif ( $opts{S} ) {
-        save();
+        print_shell_script();
     }
     else {
         print_help();
@@ -164,49 +164,73 @@ sub install_plugin {
         system @cmds;
     }
     else {
-        #system @cmds;
         say "do nothing";
     }
 }
 
+sub find_match_plugin {
+    my $n       = $_[0];
+    my @plugins = get_plugins();
+    my @matched = grep { $_ eq $n || $_ eq "$n~" } @plugins;
+    return $matched[0];
+}
+
 sub uninstall_plugin {
-    my $name = $_[0];
-    remove_tree( "$VIM_BUNDLE_DIR/$name", { verbose => 1 } );
+    my $n    = $_[0];
+    my $name = find_match_plugin($n);
+    if ( !defined $name ) {
+        say "not found plugin $n";
+        return;
+    }
+    my $plugin_dir = "$VIM_BUNDLE_DIR/$name";
+    my $yes        = ask_yes("delete $plugin_dir ? (y/N)");
+    if ($yes) {
+        remove_tree( $plugin_dir, { verbose => 1 } );
+    }
+    else {
+        say "do nothing";
+    }
+}
+
+sub ask_yes {
+    my $prompt = $_[0];
+    my $in     = $term->readline($prompt);
+    return scalar( $in =~ /^(y|yes)$/i );
 }
 
 sub enable_plugin {
-    my $name = $_[0];
+    my $n    = $_[0];
+    my $name = find_match_plugin($n);
+    if ( !defined $name ) {
+        say "not found plugin $n";
+        return;
+    }
     chdir $VIM_BUNDLE_DIR or die $!;
     warn "try enable_plugin $name";
     if ( $name !~ /~$/ ) {
         say "enabled";
         return;
     }
-    if ( -d $name ) {
-        my $new_name = substr $name, 0, -1;
-        rename $name, $new_name or die $!;
-        say "enable plugin $name";
-    }
-    else {
-        say "no this plugin $name";
-    }
+    my $new_name = substr $name, 0, -1;
+    rename $name, $new_name or die $!;
+    say "enable plugin $name";
 }
 
 sub disable_plugin {
-    my $name = $_[0];
+    my $n    = $_[0];
+    my $name = find_match_plugin($n);
+    if ( !defined $name ) {
+        say "not found plugin $n";
+        return;
+    }
     chdir $VIM_BUNDLE_DIR or die $!;
     warn "try disable_plugin $name";
     if ( $name =~ /~$/ ) {
         say "disabled";
         return;
     }
-    if ( -d $name ) {
-        rename $name, "$name~" or die $!;
-        say "disable plugin $name";
-    }
-    else {
-        say "no this plugin $name";
-    }
+    rename $name, "$name~" or die $!;
+    say "disable plugin $name";
 }
 
 sub install_pathogen {
@@ -231,7 +255,12 @@ sub update_plugin {
         update_plugin_many(@enabled);
     }
     else {
-        update_plugin_one($name);
+        my $plugin = find_match_plugin($name);
+        if ( !defined $plugin ) {
+            say "not found plugin $name";
+            return;
+        }
+        update_plugin_one($plugin);
     }
 }
 
@@ -250,7 +279,7 @@ sub update_plugin_many {
     }
 }
 
-sub save {
+sub print_shell_script {
     say "#!/bin/sh";
     say 'cd $HOME/.vim/bundle';
     for my $p ( get_plugins() ) {
