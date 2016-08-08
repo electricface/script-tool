@@ -144,7 +144,7 @@ sub get_good_plugin_name {
     my $name = $_[0];
     $name =~ s/^vim-//;
     $name =~ s/\.git$//;
-    $name =~ s/\.vim$//;
+    $name =~ s/(\.|-)vim$//;
     return $name;
 }
 
@@ -155,6 +155,8 @@ sub install_plugin {
     my $bname  = basename($git_uri);
     $term->add_history($bname);
     my $good_name = get_good_plugin_name($bname);
+    $term->add_history( "lang-" . $good_name );
+    $term->add_history( "colorscheme-" . $good_name );
     $term->add_history($good_name);
     my $name = $term->readline($prompt);
     my @cmds = ( "git", "clone", $git_uri );
