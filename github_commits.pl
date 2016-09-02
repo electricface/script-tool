@@ -65,6 +65,7 @@ MAIN: {
     my ($user, $repo, $branch) = @ARGV;
 
     my ($fh, $tmp_file) = tempfile("github_commits-XXXXXXX", UNLINK => 1);
+    binmode($fh, ':utf8');
     my $commits = get_commits($user, $repo, $branch);
     for (@$commits) {
         print_commit($fh, $_);
