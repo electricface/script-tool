@@ -33,7 +33,7 @@ sub verifySocket {
 
 sub verifyGuid {
 	my ($guid) = @_;
-	if ($guid =~ /^guid=[0-9a-f]{32}$/ ) {
+	if (!defined $guid || $guid =~ /^guid=[0-9a-f]{32}$/ ) {
 		return 1
 	}
 	return 0
