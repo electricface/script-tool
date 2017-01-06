@@ -3,43 +3,38 @@ use warnings;
 use strict;
 use 5.018;
 
-sub get_dbus_session_daemon_pid {
-    my @process_cmdlines = qx(pgrep -a dbus-daemon);
-    ### @process_cmdlines
-    my @session_cmdlines = grep { $_ =~ /--session/ } @process_cmdlines;
-    ### @session_cmdlines
-    my $session_cmdline = $session_cmdlines[0];
-    if (defined $session_cmdline) {
-        if ( $session_cmdline =~ /^(\d+)/ ) {
-            return int $1;
-        }
-    } else {
-        die "Not found pid of `dbus-daemon --session`";
-    }
+my $sessionBusAddress = $ENV{DBUS_SESSION_BUS_ADDRESS};
+### $sessionBusAddress
+
+my ($socket, $guid) = split /,/ , $sessionBusAddress,2;
+### $socket
+### $guid
+if (!verifySocket($socket)) {
+	die "socket verify failed"
 }
 
-sub dbus_tmp_file {
-    my $pid = $_[0];
-    my @lines = qx(lsof -p $pid -F n);
-    ### @lines
-    for (@lines) {
-        if ( m{@(/tmp/dbus-\S*+)} ) {
-            return $1;
-        }
-    }
+if (!verifyGuid($guid)) {
+	die "guid verify failed"
 }
 
-MAIN: {
-    my $pid = get_dbus_session_daemon_pid();
-    ### $pid
-    my $file = dbus_tmp_file( $pid );
-    ### $file
-    my $address = $ENV{DBUS_SESSION_BUS_ADDRESS};
-    ### $address
-    if ($address =~ /^unix:abstract=$file,guid=/) {
-        say "ok";
-        exit 0;
-    }
-    say "not ok";
-    exit 1;
+sub verifySocket {
+	my ($socket) = @_;
+	if ($socket =~ /^unix:path=(.*)$/) {
+		my $file = $1;
+		### $file
+		if (-S $file) {
+			# file is a socket
+			return 1
+		}
+		return 0
+	}
+	return 0
+}
+
+sub verifyGuid {
+	my ($guid) = @_;
+	if ($guid =~ /^guid=[0-9a-f]{32}$/ ) {
+		return 1
+	}
+	return 0
 }
