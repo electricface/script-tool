@@ -59,7 +59,9 @@ Options:
     -h show help
     -l list avilable ppa
     -L show local ppa
-    -s add deb-src
+    -a <PPA> add a ppa
+    -r <PPA> remove a ppa
+    -s ppa is open source
     
 ppa url base: $ppa_base_url
 save in file://$ppa_source_list_file
