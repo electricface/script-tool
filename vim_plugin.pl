@@ -10,7 +10,7 @@ use Term::ReadLine;
 use File::Basename qw(basename);
 
 my %opts;
-getopts( "hli:u:e:d:U:S", \%opts );
+getopts( "hli:u:e:d:U:Ss:", \%opts );
 
 #warn "opts: ", pp(\%opts);
 
@@ -33,6 +33,7 @@ sub print_help {
 	-d disable <name>
 	-l list
 	-u update [name/all/enabled]
+	-s show <name>
 	-S shell script
 
   about pathogen: https://github.com/tpope/vim-pathogen
@@ -74,7 +75,9 @@ MAIN: {
     }
     elsif ( $opts{S} ) {
         print_shell_script();
-    }
+    } elsif ( defined $opts{s} ) {
+		show_plugin( $opts{s} );
+	}
     else {
         print_help();
     }
@@ -279,6 +282,24 @@ sub update_plugin_many {
     for my $p (@_) {
         update_plugin_one($p);
     }
+}
+
+sub show_plugin {
+	my ($name) = @_;
+	my $plugin = find_match_plugin($name);
+	say "plugin: ", get_plugin_display_name($plugin);
+	my $dir = "$VIM_BUNDLE_DIR/$plugin";
+	say "directory: ", $dir;
+
+	my @readmes = glob "$dir/README.*";
+	if (@readmes) {
+		say "readme: ", $readmes[0]
+	}
+
+	chdir $dir or die "chdir $dir failed: $!";
+	my $git_uri = qx(git config --get remote.origin.url);
+	chomp $git_uri;
+	say "git: $git_uri";
 }
 
 sub print_shell_script {
