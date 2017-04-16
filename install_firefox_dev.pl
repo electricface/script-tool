@@ -21,16 +21,17 @@ if ($check) {
 			die "not starts with firefox/"
 		}
 	}
+	warn "check ok";
 }
-
-my $tmpdir = tempdir("upack-XXXXXX", DIR => "/home/tp/applications/");
+my $destdir = "$HOME/applications";
+my $tmpdir = tempdir("upack-XXXXXX", DIR => $destdir);
 warn "tmpdir:", $tmpdir;
 chdir $tmpdir or die "Can't cd to tmpdir $tmpdir: $!";
 print "extracting.";
 # 提示: tar 命令的 --checkpoint 参数设置为 .1000 会在每经过1000个检查点时打印出一个点'.'
 system "tar --extract --totals --checkpoint=.1000 --file $zipfile";
 my $suffix = strftime("%Y-%m-%dT%H:%M:%S", localtime);
-my $dest="$HOME/applications/firefox-dev-$suffix";
+my $dest="$destdir/firefox-dev-$suffix";
 rename "$tmpdir/firefox", $dest;
 say "done.\n$dest";
 
