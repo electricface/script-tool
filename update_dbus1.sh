@@ -21,6 +21,9 @@ sed -i 's#"github.com/godbus/dbus#"pkg.deepin.io/lib/dbus1#' */*.go
 
 # skip TestSystemBus
 sed -i '/func TestSystemBus/a t.Skip("do not call SystemBus")' conn_test.go
+# skip TestTcpNonceConnection
+sed -i '/func TestTcpNonceConnection/a t.Skip("do not test tcp-nonce")' transport_nonce_tcp_test.go
+
 find -type f -name '*.go' -exec goimports -w '{}' \;
 echo $commit_id > git_commit
 
