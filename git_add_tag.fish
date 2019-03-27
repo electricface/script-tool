@@ -1,4 +1,6 @@
 #!/usr/bin/env fish
+head CHANGELOG.md
+echo ------------
 set match (head -n1 CHANGELOG.md | string match -r '\[(.*)\]')
 if [ (count $match) -ne 2 ]
     echo not found tag
