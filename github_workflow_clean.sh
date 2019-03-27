@@ -24,10 +24,18 @@ if [ -z "$prBaseBranch" ]; then
     exit 2
 fi
 
-# delete user remote branch
-git push $user :$branch
+if git remote| grep upstream >/dev/null; then
+    forkRemote=origin
+    upstreamRemote=upstream
+else
+    forkRemote=$user
+    upstreamRemote=origin
+fi
+
+# delete fork remote branch
+git push $forkRemote :$branch
 git checkout $prBaseBranch
-git pull origin $prBaseBranch
-git push $user $prBaseBranch
+git pull $upstreamRemote $prBaseBranch
+git push $forkRemote $prBaseBranch
 # delete local branch
 git branch -D $branch
