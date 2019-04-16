@@ -33,7 +33,7 @@ else
 fi
 
 # delete fork remote branch
-git push $forkRemote :$branch
+git push $forkRemote :$branch || echo failed to delete remote branch
 git checkout $prBaseBranch
 git pull $upstreamRemote $prBaseBranch
 git push $forkRemote $prBaseBranch
