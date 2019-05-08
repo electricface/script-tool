@@ -8,9 +8,7 @@ if [ -z "$user" ]; then
     exit 2
 fi
 
-headSha=$(git rev-parse HEAD)
-
-prInfo=$(hub pr list -s all -h $user:$branch -f "%S,%B,%sH%n"|grep ,$headSha)
+prInfo=$(hub pr list -s all -h $user:$branch -f "%S,%B%n"|head -n1)
 prState=$(echo $prInfo|cut -d , -f 1)
 prBaseBranch=$(echo $prInfo|cut -d , -f 2)
 
