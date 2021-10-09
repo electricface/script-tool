@@ -7,21 +7,180 @@ import argparse
 import sys
 
 g_services = [
+    # dde-daemon
     {
-        "name": "dde-system-daemon",
-        "path": "/usr/lib/deepin-daemon/dde-system-daemon",
-                "desc": "DDE后端 - 系统级守护进程"
+        "pkgname": "dde-daemon"
+    },
+    {
+        "name": "backlight_helper",
+        "path": "/usr/lib/deepin-daemon/backlight_helper",
+        "desc": "DDE后端 - 背光设置程序"
+    },
+    {
+        "name": "dde-greeter-setter",
+        "path": "/usr/lib/deepin-daemon/dde-greeter-setter",
+        "desc": "DDE后端 - 登录界面设置程序"
+    },
+    {
+        "name": "dde-lockservice",
+        "path": "/usr/lib/deepin-daemon/dde-lockservice",
+        "desc": "DDE后端 - 锁屏鉴权服务"
     },
     {
         "name": "dde-session-daemon",
         "path": "/usr/lib/deepin-daemon/dde-session-daemon",
-                "desc": "DDE后端 - 用户级守护进程"
+        "desc": "DDE后端 - 用户级守护程序"
     },
     {
-        "name": "xcalc",
-                "path": "/usr/bin/xcalc",
-                "desc": "测试程序"
-    }
+        "name": "dde-system-daemon",
+        "path": "/usr/lib/deepin-daemon/dde-system-daemon",
+        "desc": "DDE后端 - 系统级守护程序"
+    },
+    {
+        "name": "default-file-manager",
+        "path": "/usr/lib/deepin-daemon/default-file-manager",
+        "desc": "DDE后端 - 默认文件管理器"
+    },
+    {
+        "name": "default-terminal",
+        "path": "/usr/lib/deepin-daemon/default-terminal",
+        "desc": "DDE后端 - 默认终端"
+    },
+    {
+        "name": "desktop-toggle",
+        "path": "/usr/lib/deepin-daemon/desktop-toggle",
+        "desc": "DDE后端 - 显示隐藏桌面"
+    },
+    {
+        "name": "grub2",
+        "path": "/usr/lib/deepin-daemon/grub2",
+        "desc": "DDE后端 - GRUB配置守护程序"
+    },
+    {
+        "name": "langselector",
+        "path": "/usr/lib/deepin-daemon/langselector",
+        "desc": "DDE后端 - 语言设置守护程序"
+    },
+    {
+        "name": "soundeffect",
+        "path": "/usr/lib/deepin-daemon/soundeffect",
+        "desc": "DDE后端 - 音效守护程序"
+    },
+    # startdde
+    {
+        "pkgname": "startdde"
+    },
+    {
+        "name": "startdde",
+        "path": "/usr/bin/startdde",
+        "desc": "DDE后端 - DDE启动守护程序"
+    },
+    {
+        "name": "greeter-display-daemon",
+        "path": "/usr/lib/deepin-daemon/greeter-display-daemon",
+        "desc": "DDE后端 - 登录界面显示守护程序"
+    },
+    # dde-api
+    {
+        "pkgname": "dde-api"
+    },
+    {
+        "name": "adjust-grub-theme",
+        "path": "/usr/lib/deepin-api/adjust-grub-theme",
+        "desc": "DDE后端 - 调整GRUB主题程序"
+    },
+    {
+        "name": "cursor-helper",
+        "path": "/usr/lib/deepin-api/cursor-helper",
+        "desc": "DDE后端 - 光标设置辅助程序"
+    },
+    {
+        "name": "deepin-shutdown-sound",
+        "path": "/usr/lib/deepin-api/deepin-shutdown-sound",
+        "desc": "DDE后端 - 关机音效播放程序"
+    },
+    {
+        "name": "image-blur-helper",
+        "path": "/usr/lib/deepin-api/image-blur-helper",
+        "desc": "DDE后端 - 模块背景辅助程序"
+    },
+    {
+        "name": "locale-helper",
+        "path": "/usr/lib/deepin-api/locale-helper",
+        "desc": "DDE后端 - 语言设置辅助程序"
+    },
+    {
+        "name": "sound-theme-player",
+        "path": "/usr/lib/deepin-api/sound-theme-player",
+        "desc": "DDE后端 - 系统级音效播放程序"
+    },
+    # lastore-daemon
+    {
+        "pkgname": "lastore-daemon"
+    },
+    {
+        "name": "lastore-daemon",
+        "path": "/usr/libexec/lastore-daemon/lastore-daemon",
+        "desc": "DDE后端 - 商店守护程序"
+    },
+    {
+        "name": "lastore-smartmirror-daemon",
+        "path": "/usr/libexec/lastore-daemon/lastore-smartmirror-daemon",
+        "desc": "DDE后端 - 商店智能镜像源守护程序"
+    },
+    # deepin-authentication
+    {
+        "pkgname": "deepin-authentication"
+    },
+    {
+        "name": "deepin-authentication",
+        "path": "/usr/lib/deepin-authenticate/deepin-authentication",
+        "desc": "DDE后端 - 验证守护程序"
+    },
+    # deepin-proxy
+    {
+        "pkgname": "deepin-proxy"
+    },
+    {
+        "name": "dde-proxy",
+        "path": "/usr/lib/deepin-daemon/dde-proxy",
+        "desc": "DDE后端 - 网络代理守护程序"
+    },
+    # deepin-user-experience-daemon
+    {
+        "pkgname": "deepin-user-experience-daemon"
+    },
+    {
+        "name": "deepin-user-experience-daemon",
+        "path": "/usr/bin/deepin-user-experience-daemon",
+        "desc": "DDE后端 - 用户体验计划守护程序"
+    },
+    # deepin-sync-daemon
+    {
+        "pkgname": "deepin-sync-daemon"
+    },
+    {
+        "name": "deepin-sync-helper",
+        "path": "/usr/lib/deepin-deepinid-daemon/deepin-sync-helper",
+        "desc": "Web后端 - 系统级云同步辅助程序"
+    },
+    {
+        "name": "deepin-deepinid-daemon",
+        "path": "/usr/lib/deepin-deepinid-daemon/deepin-deepinid-daemon",
+        "desc": "Web后端 - 用户级云同步守护程序"
+    },
+    # {
+    #     "name": "",
+    #     "path": "",
+    #     "desc": "DDE后端 - 程序"
+    # },
+    # other
+    # {
+    #     "name": "xcalc",
+    #     "path": "/usr/bin/xcalc",
+    #     "desc": "测试程序"
+    # }
+
 ]
 
 
@@ -33,15 +192,25 @@ class ReplaceStatus(enum.Enum):
 
 def show_all_status():
     for service in g_services:
-        show_status(service["name"])
+        if service.get("pkgname"):
+            print("\n== 包{} ==".format(service["pkgname"]))
+        else:
+            show_status(service["name"])
 
+def find_service(name):
+    if name.isdecimal():
+        id = int(name)
+        for s in g_services:
+            if s.get("id") == id:
+                return s
+    else:
+        for s in g_services:
+            if s.get("name") == name:
+                return s
+    return None
 
 def show_status(name):
-    service = None
-    for s in g_services:
-        if s["name"] == name:
-            service = s
-            break
+    service = find_service(name)
     if service is None:
         # TODO
         return
@@ -69,19 +238,14 @@ def show_status(name):
 
     if status == ReplaceStatus.DONE and (not os.path.exists(bin + ".real")):
         status = ReplaceStatus.ABNORMAL
-    status_line = "{}, {}, {}".format(name, service["desc"], status.value)
+    status_line = "[{:02}] {}, {}, {}".format(service["id"], service["name"], service["desc"], status.value)
     if status == ReplaceStatus.DONE:
-        # print("延迟{}秒".format(delay))
         status_line += ", 延迟 {} 秒".format(delay)
     print(status_line)
 
 
 def restore(name):
-    service = None
-    for s in g_services:
-        if s["name"] == name:
-            service = s
-            break
+    service = find_service(name)
     if service is None:
         # TODO
         return
@@ -100,14 +264,12 @@ def restore(name):
 
 def restore_all():
     for service in g_services:
-        restore(service["name"])
+        if service.get("name"):
+            restore(service["name"])
+
 
 def set_delay(name, delay):
-    service = None
-    for s in g_services:
-        if s["name"] == name:
-            service = s
-            break
+    service = find_service(name)
     if service is None:
         # TODO
         return
@@ -142,6 +304,14 @@ def check_privilege():
         print("run with root user")
         exit(1)
 
+g_id = 0
+
+def add_id(service):
+    if service.get("name"):
+        global g_id
+        g_id += 1
+        service["id"] = g_id
+    return service
 
 if __name__ == '__main__':
 
@@ -155,7 +325,9 @@ if __name__ == '__main__':
                         action='store_true', help='恢复')
     args = parser.parse_args()
 
-    # print("args:", args)
+    g_services = [ add_id(s) for s in g_services ]
+    # print(g_services)
+
     if args.show_status and args.service is None:
         show_all_status()
     elif len(sys.argv) == 1:
