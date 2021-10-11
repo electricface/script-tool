@@ -189,13 +189,14 @@ class ReplaceStatus(enum.Enum):
     NONE = '未替换'
     DONE = '替换完成'
     ABNORMAL = '替换异常'
+    NOT_INSTALLED = '未安装'
 
     def color(self):
         if self == ReplaceStatus.NONE:
             return None
         elif self == ReplaceStatus.DONE:
             return 'yellow'
-        elif self == ReplaceStatus.ABNORMAL:
+        elif self == ReplaceStatus.ABNORMAL or self == ReplaceStatus.NOT_INSTALLED:
             return 'red'
 
 
@@ -230,26 +231,29 @@ def show_status(name, only_one=False):
     delay = 0
     status = ReplaceStatus.NONE
     bin = service["path"]
-    try:
-        with open(bin, 'rb') as f:
-            content = f.read(30)
-            if b'# replace script\n' in content:
-                status = ReplaceStatus.DONE
-                f.seek(0, os.SEEK_SET)
-                lines = f.readlines()
-                found_data = False
-                for line in lines:
-                    if line.startswith(b'# data:'):
-                        found_data = True
-                        try:
-                            data = json.loads(line[7:])
-                            delay = data["delay"]
-                        except json.decoder.JSONDecodeError:
-                            status = ReplaceStatus.ABNORMAL
-                if not found_data:
-                    status == ReplaceStatus.ABNORMAL
-    except:
-        status = ReplaceStatus.ABNORMAL
+    if not os.path.exists(bin):
+        status = ReplaceStatus.NOT_INSTALLED
+    else:
+        try:
+            with open(bin, 'rb') as f:
+                content = f.read(30)
+                if b'# replace script\n' in content:
+                    status = ReplaceStatus.DONE
+                    f.seek(0, os.SEEK_SET)
+                    lines = f.readlines()
+                    found_data = False
+                    for line in lines:
+                        if line.startswith(b'# data:'):
+                            found_data = True
+                            try:
+                                data = json.loads(line[7:])
+                                delay = data["delay"]
+                            except json.decoder.JSONDecodeError:
+                                status = ReplaceStatus.ABNORMAL
+                    if not found_data:
+                        status == ReplaceStatus.ABNORMAL
+        except:
+            status = ReplaceStatus.ABNORMAL
 
     if status == ReplaceStatus.DONE and (not os.path.exists(bin + ".real")):
         status = ReplaceStatus.ABNORMAL
@@ -262,22 +266,30 @@ def show_status(name, only_one=False):
         print('路径:', service["path"])
 
 
-def restore(name):
+def restore(name, only_one=False):
     service = find_service(name)
     if service is None:
         print_unknown_service(name)
         return
     bin = service["path"]
     is_script = False
-    with open(bin, 'rb') as f:
-        content = f.read(30)
-        if b'# replace script\n' in content:
-            #print("it is a replace script\n")
-            is_script = True
+    try:
+        with open(bin, 'rb') as f:
+            content = f.read(30)
+            if b'# replace script\n' in content:
+                #print("it is a replace script\n")
+                is_script = True
+    except:
+        pass
     path_real = bin + ".real"
     if is_script and os.path.exists(path_real):
         os.remove(bin)
         os.rename(path_real, bin)
+        if only_one:
+            print('恢复完成')
+    else:
+        if only_one:
+            print('未做操作')
 
 
 def restore_all():
@@ -290,6 +302,7 @@ def restore_all():
 def print_unknown_service(name):
     print('未找到程序或服务', name)
 
+
 def set_delay(name, delay):
     service = find_service(name)
     if service is None:
@@ -298,6 +311,11 @@ def set_delay(name, delay):
 
     need_rename = True
     bin = service["path"]
+
+    if not os.path.exists(bin):
+        print('未安装程序', bin)
+        return
+
     with open(bin, 'rb') as f:
         content = f.read(30)
         if b'# replace script\n' in content:
@@ -307,6 +325,8 @@ def set_delay(name, delay):
     dst = bin + ".real"
     if need_rename:
         os.rename(bin, dst)
+
+    # 写替换脚本，用来延迟并执行真的可执行文件。
     with open(bin, 'w') as f:
         lines = [
             "#!/bin/sh\n",
@@ -316,14 +336,16 @@ def set_delay(name, delay):
             "exec {}\n".format(dst)
         ]
         f.writelines(lines)
+    # 加权限 0755
     os.chmod(bin, stat.S_IRWXU | stat.S_IRGRP |
              stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
 
 
+# 检查权限，一些操作只有 root 能做。
 def check_privilege():
     uid = os.geteuid()
     if uid != 0:
-        print("run with root user")
+        print("请使用root用户权限操作，或加 sudo。")
         exit(1)
 
 
@@ -351,15 +373,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     g_services = [add_id(s) for s in g_services]
-    # print(g_services)
+    # print('g_services:',g_services)
+    # print('args:',args)
 
     if args.show_status and args.service is None:
         show_all_status()
-    elif len(sys.argv) == 1:
-        show_all_status()
     elif args.show_status and args.service:
-        show_status(args.service, True)
-    elif args.delay is None and args.service:
         show_status(args.service, True)
     elif args.delay is not None and args.service:
         check_privilege()
@@ -369,4 +388,8 @@ if __name__ == '__main__':
         restore_all()
     elif args.restore and args.service:
         check_privilege()
-        restore(args.service)
+        restore(args.service, True)
+    elif len(sys.argv) == 1:
+        show_all_status()
+    elif (args.delay is None) and (not args.restore) and args.service:
+        show_status(args.service, True)
