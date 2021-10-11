@@ -210,7 +210,18 @@ def show_all_status():
 
 
 def find_service(name):
-    if name.isdecimal():
+    if name.startswith('@'):
+        # 虚拟的服务
+        path = name[1:]
+        if len(path) == 0:
+            return None
+        return {
+            "name": os.path.basename(path),
+            "path": path,
+            "id": 0,
+            "desc": "自定义程序"
+        }
+    elif name.isdecimal():
         id = int(name)
         for s in g_services:
             if s.get("id") == id:
@@ -257,8 +268,11 @@ def show_status(name, only_one=False):
 
     if status == ReplaceStatus.DONE and (not os.path.exists(bin + ".real")):
         status = ReplaceStatus.ABNORMAL
-    status_line = "[{:02}] {}, {}, {}".format(service["id"], service["name"], service["desc"],
-                                              colored(status.value, status.color()))
+    status_line = ""
+    if service["id"] != 0:
+        status_line += "[{:02}] ".format(service["id"])
+    status_line += "{}, {}, {}".format(service["name"], service["desc"],
+                                       colored(status.value, status.color()))
     if status == ReplaceStatus.DONE:
         status_line += ", 延迟 {} 秒".format(delay)
     print(status_line)
@@ -361,8 +375,44 @@ def add_id(service):
 
 
 if __name__ == '__main__':
+    epilog = '''
+一般用法：
+显示所有状态
+$arg0
+或 $arg0 -S
 
-    parser = argparse.ArgumentParser()
+查看具体程序或服务状态，可以用数字 id 指代。
+$arg0 -s dde-system-daemon
+或 $arg0 -s 1
+或 $arg0 -S -s dde-system-daemon
+
+设置某个程序或服务延迟
+sudo $arg0 -s dde-system-daemon -d 10
+或 sudo $arg0 -s 1 -d 10
+
+恢复所有
+sudo $arg0 -r
+
+恢复某个程序或服务
+sudo $arg0 -s dde-system-daemon -r
+或 sudo $arg0 -s 1 -r
+
+自定义程序
+有些程序本脚本没有支持，也可以使用 -p 参数替代 -s 参数。-p 参数为程序路径。
+设置延迟 sudo $arg0 -p /usr/bin/xcalc -d 10
+显示状态 $arg0 -p /usr/bin/xcalc
+或 $arg0 -p /usr/bin/xcalc -S
+恢复 sudo $arg0 -p /usr/bin/xcalc -r
+
+附加功能 - 彩色显示状态
+如果安装了 termcolor 包，则以彩色显示特殊状态。
+sudo apt install python3-termcolor
+或 sudo pip3 install termcolor
+'''
+
+    epilog = epilog.replace('$arg0', sys.argv[0])
+    parser = argparse.ArgumentParser(
+        epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('-s', '--service', dest='service',
                         type=str, help='服务名')
     parser.add_argument('-S', '--status', dest='show_status',
@@ -370,9 +420,14 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--delay', dest='delay', type=int, help='设置延迟秒数')
     parser.add_argument('-r', '--restore', dest='restore',
                         action='store_true', help='恢复')
+    parser.add_argument('-p', '--path', dest='path', help='只指定程序路径')
     args = parser.parse_args()
 
+    if args.path:
+        args.service = '@' + args.path
+
     g_services = [add_id(s) for s in g_services]
+
     # print('g_services:',g_services)
     # print('args:',args)
 
