@@ -6,6 +6,19 @@ import json
 import argparse
 import sys
 
+
+def empty_colored(text, color):
+    return text
+
+
+colored = empty_colored
+
+try:
+    import termcolor
+    colored = termcolor.colored
+except ModuleNotFoundError:
+    pass
+
 g_services = [
     # dde-daemon
     {
@@ -121,12 +134,12 @@ g_services = [
     {
         "name": "lastore-daemon",
         "path": "/usr/libexec/lastore-daemon/lastore-daemon",
-        "desc": "DDE后端 - 商店守护程序"
+        "desc": "DDE后端 - 应用商店守护程序"
     },
     {
         "name": "lastore-smartmirror-daemon",
         "path": "/usr/libexec/lastore-daemon/lastore-smartmirror-daemon",
-        "desc": "DDE后端 - 商店智能镜像源守护程序"
+        "desc": "DDE后端 - 应用商店智能镜像源守护程序"
     },
     # deepin-authentication
     {
@@ -169,18 +182,6 @@ g_services = [
         "path": "/usr/lib/deepin-deepinid-daemon/deepin-deepinid-daemon",
         "desc": "Web后端 - 用户级云同步守护程序"
     },
-    # {
-    #     "name": "",
-    #     "path": "",
-    #     "desc": "DDE后端 - 程序"
-    # },
-    # other
-    # {
-    #     "name": "xcalc",
-    #     "path": "/usr/bin/xcalc",
-    #     "desc": "测试程序"
-    # }
-
 ]
 
 
@@ -189,13 +190,23 @@ class ReplaceStatus(enum.Enum):
     DONE = '替换完成'
     ABNORMAL = '替换异常'
 
+    def color(self):
+        if self == ReplaceStatus.NONE:
+            return None
+        elif self == ReplaceStatus.DONE:
+            return 'yellow'
+        elif self == ReplaceStatus.ABNORMAL:
+            return 'red'
+
 
 def show_all_status():
+    print('显示所有的状态')
     for service in g_services:
         if service.get("pkgname"):
             print("\n== 包{} ==".format(service["pkgname"]))
         else:
             show_status(service["name"])
+
 
 def find_service(name):
     if name.isdecimal():
@@ -209,45 +220,52 @@ def find_service(name):
                 return s
     return None
 
-def show_status(name):
+
+def show_status(name, only_one=False):
     service = find_service(name)
     if service is None:
-        # TODO
+        print_unknown_service(name)
         return
 
     delay = 0
     status = ReplaceStatus.NONE
     bin = service["path"]
-    with open(bin, 'rb') as f:
-        content = f.read(30)
-        if b'# replace script\n' in content:
-            status = ReplaceStatus.DONE
-            f.seek(0, os.SEEK_SET)
-            lines = f.readlines()
-            found_data = False
-            for line in lines:
-                if line.startswith(b'# data:'):
-                    found_data = True
-                    try:
-                        data = json.loads(line[7:])
-                        delay = data["delay"]
-                    except json.decoder.JSONDecodeError:
-                        status = ReplaceStatus.ABNORMAL
-            if not found_data:
-                status == ReplaceStatus.ABNORMAL
+    try:
+        with open(bin, 'rb') as f:
+            content = f.read(30)
+            if b'# replace script\n' in content:
+                status = ReplaceStatus.DONE
+                f.seek(0, os.SEEK_SET)
+                lines = f.readlines()
+                found_data = False
+                for line in lines:
+                    if line.startswith(b'# data:'):
+                        found_data = True
+                        try:
+                            data = json.loads(line[7:])
+                            delay = data["delay"]
+                        except json.decoder.JSONDecodeError:
+                            status = ReplaceStatus.ABNORMAL
+                if not found_data:
+                    status == ReplaceStatus.ABNORMAL
+    except:
+        status = ReplaceStatus.ABNORMAL
 
     if status == ReplaceStatus.DONE and (not os.path.exists(bin + ".real")):
         status = ReplaceStatus.ABNORMAL
-    status_line = "[{:02}] {}, {}, {}".format(service["id"], service["name"], service["desc"], status.value)
+    status_line = "[{:02}] {}, {}, {}".format(service["id"], service["name"], service["desc"],
+                                              colored(status.value, status.color()))
     if status == ReplaceStatus.DONE:
         status_line += ", 延迟 {} 秒".format(delay)
     print(status_line)
+    if only_one:
+        print('路径:', service["path"])
 
 
 def restore(name):
     service = find_service(name)
     if service is None:
-        # TODO
+        print_unknown_service(name)
         return
     bin = service["path"]
     is_script = False
@@ -266,12 +284,16 @@ def restore_all():
     for service in g_services:
         if service.get("name"):
             restore(service["name"])
+    print('已恢复所有的')
 
+
+def print_unknown_service(name):
+    print('未找到程序或服务', name)
 
 def set_delay(name, delay):
     service = find_service(name)
     if service is None:
-        # TODO
+        print_unknown_service(name)
         return
 
     need_rename = True
@@ -304,7 +326,9 @@ def check_privilege():
         print("run with root user")
         exit(1)
 
+
 g_id = 0
+
 
 def add_id(service):
     if service.get("name"):
@@ -312,6 +336,7 @@ def add_id(service):
         g_id += 1
         service["id"] = g_id
     return service
+
 
 if __name__ == '__main__':
 
@@ -325,7 +350,7 @@ if __name__ == '__main__':
                         action='store_true', help='恢复')
     args = parser.parse_args()
 
-    g_services = [ add_id(s) for s in g_services ]
+    g_services = [add_id(s) for s in g_services]
     # print(g_services)
 
     if args.show_status and args.service is None:
@@ -333,7 +358,9 @@ if __name__ == '__main__':
     elif len(sys.argv) == 1:
         show_all_status()
     elif args.show_status and args.service:
-        show_status(args.service)
+        show_status(args.service, True)
+    elif args.delay is None and args.service:
+        show_status(args.service, True)
     elif args.delay is not None and args.service:
         check_privilege()
         set_delay(args.service, args.delay)
