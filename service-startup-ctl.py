@@ -6,6 +6,8 @@ import json
 import argparse
 import sys
 
+# 关键服务延迟启动的脚本
+# Task: https://pms.uniontech.com/zentao/task-view-84636.html
 
 def empty_colored(text, color):
     return text
@@ -347,7 +349,7 @@ def set_delay(name, delay):
             "# replace script\n",
             "# data:{}\n".format(json.dumps({"delay": delay})),
             "sleep {}\n".format(delay),
-            "exec {}\n".format(dst)
+            "exec {} \"$@\"\n".format(dst)
         ]
         f.writelines(lines)
     # 加权限 0755
