@@ -1,6 +1,6 @@
 #!/bin/sh
 export GLFW_IM_MODULE=ibus 
-exec /home/del0/applications/kitty-*/bin/kitty --title 'Kitty Terminal'
+exec /home/del0/applications/kitty-*/bin/kitty "$@"
 
 # 用途：
 # 请把这个脚本设置为 kitty 命令
