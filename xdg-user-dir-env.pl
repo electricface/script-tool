@@ -2,10 +2,21 @@
 use warnings;
 use strict;
 use 5.018;
-
-no Smart::Comments;
-use Path::Tiny;
 use Getopt::Std;
+
+sub output {
+#fish
+# set -x key value
+
+#bash
+# export key=value
+    my ($shell, $key, $value) = @_;
+    if ($shell eq 'fish') {
+        say "set -x $key $value;";
+    } elsif ( $shell eq 'bash' ) {
+        say "export $key=$value;";
+    }
+}
 
 my %opts;
 
@@ -31,23 +42,12 @@ binmode \*STDOUT, 'utf8';
 my $userDirsCfgFile = "$ENV{HOME}/.config/user-dirs.dirs";
 ### $userDirsCfgFile
 
-my @contents = path($userDirsCfgFile)->lines_utf8({chomp => 1});
+open my $fh, '<:encoding(UTF-8)', $userDirsCfgFile or die "cannot open file '$userDirsCfgFile': $!";
+my @contents = map { chomp; $_ } <$fh>;
+close $fh;
 for ( @contents ) {
     next if /^#/;
     my ($key, $value) = split /=/, $_, 2;
     output($outputShell, $key, $value)
 }
 
-sub output {
-#fish
-# set -x key value
-
-#bash
-# export key=value
-    my ($shell, $key, $value) = @_;
-    if ($shell eq 'fish') {
-        say "set -x $key $value;";
-    } elsif ( $shell eq 'bash' ) {
-        say "export $key=$value;";
-    }
-}
