@@ -3,7 +3,13 @@ use warnings;
 use strict;
 use 5.018;
 
-use Data::Dump qw(quote);
+# Simple quote function to replace Data::Dump::quote
+sub quote {
+    my $str = shift;
+    # Escape special characters and wrap in single quotes
+    $str =~ s/'/'"'"'/g;  # Replace single quotes with '"'"'
+    return "'$str'";
+}
 
 # config file ~/.config/easy-path.cfg.pl
 
