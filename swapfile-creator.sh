@@ -1,5 +1,28 @@
 #!/bin/bash
-# swapfile-creator.sh - 创建两个 swapfile 并启用，支持容错和自动恢复
+# swapfile-creator.sh - 交互式创建多个 swapfile 并启用
+#
+# 功能描述:
+#   - 通过命令行交互式输入创建一个或多个 swapfile
+#   - 自动验证父目录存在性
+#   - 自动卸载已挂载的旧 swapfile 后安全删除
+#   - 创建、格式化并启用 swapfile
+#   - 自动生成 /etc/fstab 配置示例（开机自动挂载）
+#
+# 使用方法:
+#   sudo bash swapfile-creator.sh
+#
+# 交互流程:
+#   1. 输入要创建的 swapfile 数量
+#   2. 依次输入每个 swapfile 的路径和大小
+#      - 路径示例: /swapfile, /persistent/swapfile
+#      - 大小示例: 2G, 4G, 2048M
+#   3. 确认配置并自动创建
+#   4. 查看 /etc/fstab 配置建议
+#
+# 注意事项:
+#   - 需要 root 权限运行
+#   - 确保父目录已存在
+#   - 旧的 swapfile 会被自动卸载并删除
 
 # 默认值
 BLOCK_SIZE="1M"
@@ -24,7 +47,7 @@ for ((i=1; i<=SWAPFILE_COUNT; i++)); do
     
     # 获取并验证 swapfile 路径
     while true; do
-        read -p "Swapfile 路径 (例如: /swapfile$i): " SWAPFILE_PATH
+        read -p "Swapfile 路径 (例如: /swapfile): " SWAPFILE_PATH
         
         # 检查路径是否为空
         if [[ -z "$SWAPFILE_PATH" ]]; then
