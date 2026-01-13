@@ -1,90 +1,223 @@
-#!/usr/bin/perl
-use strict;
-use warnings;
-use 5.14.2;
-use Curses::UI;
-use Getopt::Std;
-my %opts;
-getopts "h" , \%opts;
-if ( $opts{h} or ! defined $ARGV[0] ) {
-	help_message();
-}
-
-my @pids = qx(pgrep -f $ARGV[0]);
-@pids = map { chomp;$_} @pids;
+#!/usr/bin/env python3
+import sys
+import subprocess
+import os
+import argparse
+import urwid
 
 
-my $pids_str = join ",", @pids;
-my %pid_dict;
-my %listbox_labels;
-my @listbox_values;
-for ( qx(ps h -p '$pids_str' -o uid,pid,cmd) ){
-	chomp;
-	my ($uid,$pid,$cmd)	= split ' ',$_,3;
-	next if $cmd =~ /perl.*psfind/;
-
-	push @listbox_values, $pid;
-	$pid_dict{$pid} = [$uid,$cmd];
-	$listbox_labels{$pid} = "$uid $pid $cmd";
-}
-
-if (0 == @listbox_values){
-	print "No result\n";
-	exit;
-}
-my $cui = Curses::UI->new( -color_support => 1 );
-my $win = $cui->add('window_id','Window');
-
-$win->add(
-	'mylabel','Label',
-	-text => 'psfind (q Quit , d Done)',
-	-bold => 1,
-	-y => 0,
-);
-
-my %listbox_selected;
-%listbox_selected = ( 0 => 1 ) if 1 == @listbox_values;
-
-my $listbox = $win->add(
-	'mylistbox', 'Listbox',
-	-y => 1,
-	-values => \@listbox_values,
-	-labels => \%listbox_labels, 
-	-multi => 1,
-	-selected => \%listbox_selected, 
-);
-
-$cui->set_binding( sub { $cui->mainloopExit }  , "q" ); 
-$cui->set_binding( \&kill_selected , "d" ); 
-
-$listbox->focus();
-
-
-$cui->mainloop;
-
-
-sub help_message {
-	say "
-  k\tUp
-  j\tDown
-  Space\tMark
-  d\tKill
-  q\tQuit
+def help_message():
+    print("""
+  k/Up      Up
+  j/Down    Down
+  Space     Mark/Unmark
+  a         Toggle select all/deselect all
+  d         Kill selected processes
+  q         Quit
 
 Options:
- -h\tShow help";
- exit;
-}
+  -h, --help    Show help""")
+    sys.exit(0)
 
-sub kill_selected {
-	for ( $listbox->get ){
-		my ($uid,$cmd) = @{ $pid_dict{$_} };
-		if ($uid != $<){
-			system "gksu kill $_";
-		} else {
-			system "kill $_";
-		}
-	}
-	exit;
-}
 
+def get_processes(pattern):
+    """Find processes matching the pattern and get their details."""
+    try:
+        # Run pgrep to find matching PIDs
+        result = subprocess.run(
+            ['pgrep', '-f', pattern],
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+
+        pids = [pid.strip() for pid in result.stdout.strip().split('\n')]
+        pids_str = ','.join(pids)
+
+        # Get process details
+        ps_result = subprocess.run(
+            ['ps', 'h', '-p', pids_str, '-o', 'uid,pid,cmd'],
+            capture_output=True,
+            text=True
+        )
+
+        if ps_result.returncode != 0:
+            return []
+
+        processes = []
+        for line in ps_result.stdout.strip().split('\n'):
+            parts = line.split(None, 2)
+            if len(parts) >= 3:
+                uid, pid, cmd = parts
+                # Filter out psfind itself
+                if 'psfind' not in cmd or 'python' not in cmd.lower():
+                    processes.append({
+                        'uid': int(uid),
+                        'pid': pid,
+                        'cmd': cmd,
+                        'label': f"{uid:8} {pid:8} {cmd}"
+                    })
+
+        return processes
+
+    except Exception as e:
+        print(f"Error getting processes: {e}", file=sys.stderr)
+        return []
+
+
+class ProcessListBox(urwid.WidgetWrap):
+    """Custom list box for process selection."""
+
+    def __init__(self, processes):
+        self.processes = processes
+        self.selected = set()
+
+        # Auto-select if only one process
+        if len(processes) == 1:
+            self.selected.add(0)
+
+        # Create checkbox widgets
+        self.items = []
+        for i, proc in enumerate(processes):
+            cb = urwid.CheckBox(proc['label'], state=(i in self.selected))
+            urwid.connect_signal(cb, 'change', self.on_checkbox_change, user_args=[i])
+            self.items.append(cb)
+
+        self.listbox = urwid.ListBox(urwid.SimpleFocusListWalker(self.items))
+        super().__init__(self.listbox)
+
+    def on_checkbox_change(self, index, checkbox, new_state):
+        """Handle checkbox state changes."""
+        if new_state:
+            self.selected.add(index)
+        else:
+            self.selected.discard(index)
+
+    def toggle_select_all(self):
+        """Toggle between select all and deselect all."""
+        # If all are selected, deselect all; otherwise select all
+        if len(self.selected) == len(self.processes):
+            # Deselect all
+            self.selected.clear()
+            for item in self.items:
+                item.set_state(False, do_callback=False)
+        else:
+            # Select all
+            self.selected = set(range(len(self.processes)))
+            for item in self.items:
+                item.set_state(True, do_callback=False)
+
+    def get_selected_processes(self):
+        """Return list of selected process dictionaries."""
+        return [self.processes[i] for i in sorted(self.selected)]
+
+
+class ProcessKillerApp:
+    """Main application class."""
+
+    def __init__(self, processes):
+        self.processes = processes
+
+        # Create header
+        header = urwid.AttrMap(
+            urwid.Text('psfind (q Quit, d Kill selected, a Toggle all)', align='left'),
+            'header'
+        )
+
+        # Create process list
+        self.process_list = ProcessListBox(processes)
+
+        # Create frame
+        self.frame = urwid.Frame(
+            header=header,
+            body=self.process_list
+        )
+
+        # Set up palette
+        self.palette = [
+            ('header', 'white,bold', 'dark blue'),
+        ]
+
+    def handle_input(self, key):
+        """Handle keyboard input."""
+        if key in ('q', 'Q'):
+            raise urwid.ExitMainLoop()
+        elif key in ('d', 'D'):
+            self.kill_selected()
+        elif key in ('a', 'A'):
+            self.process_list.toggle_select_all()
+        elif key == 'j':
+            # Move down
+            self.process_list.listbox.keypress((0, 0), 'down')
+        elif key == 'k':
+            # Move up
+            self.process_list.listbox.keypress((0, 0), 'up')
+
+    def kill_selected(self):
+        """Kill selected processes."""
+        selected = self.process_list.get_selected_processes()
+
+        if not selected:
+            raise urwid.ExitMainLoop()
+
+        current_uid = os.getuid()
+
+        for proc in selected:
+            pid = proc['pid']
+            uid = proc['uid']
+
+            try:
+                if uid != current_uid:
+                    # Need elevated privileges
+                    # Try pkexec first (more modern), fall back to gksu
+                    if subprocess.run(['which', 'pkexec'], capture_output=True).returncode == 0:
+                        subprocess.run(['pkexec', 'kill', pid])
+                    elif subprocess.run(['which', 'gksu'], capture_output=True).returncode == 0:
+                        subprocess.run(['gksu', 'kill', pid])
+                    else:
+                        subprocess.run(['sudo', 'kill', pid])
+                else:
+                    subprocess.run(['kill', pid])
+            except Exception as e:
+                # Continue killing other processes even if one fails
+                pass
+
+        raise urwid.ExitMainLoop()
+
+    def run(self):
+        """Run the main loop."""
+        loop = urwid.MainLoop(
+            self.frame,
+            palette=self.palette,
+            unhandled_input=self.handle_input
+        )
+        loop.run()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Find and kill processes interactively',
+        add_help=False
+    )
+    parser.add_argument('-h', action='store_true', help='Show help')
+    parser.add_argument('pattern', nargs='?', help='Process pattern to search for')
+
+    args = parser.parse_args()
+
+    if args.h or not args.pattern:
+        help_message()
+
+    processes = get_processes(args.pattern)
+
+    if not processes:
+        print("No result")
+        sys.exit(0)
+
+    app = ProcessKillerApp(processes)
+    app.run()
+
+
+if __name__ == '__main__':
+    main()
