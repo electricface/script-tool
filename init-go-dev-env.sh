@@ -1,19 +1,25 @@
 #!/bin/bash
 # 功能：UOS/deepin V20 系统初始化go开发环境，适合 dde-daemon 等项目开发。
-
+sudo apt install -y git git-review d-feet
 # git config
-GIT_USER_NAME="${GIT_USER_NAME:-electricface}"
-GIT_USER_EMAIL="${GIT_USER_EMAIL:-songwentai@uniontech.com}"
+CURRENT_GIT_NAME=$(git config --global user.name 2>/dev/null || echo "")
+CURRENT_GIT_EMAIL=$(git config --global user.email 2>/dev/null || echo "")
 
-if ! command -v git &> /dev/null; then
-    echo "git not found, installing..."
-    sudo apt install -y git
+if [ -z "$CURRENT_GIT_NAME" ]; then
+    read -p "请输入 Git 用户名: " GIT_USER_NAME
+    git config --global user.name "$GIT_USER_NAME"
+    echo "Git 用户名已设置为: $GIT_USER_NAME"
 else
-    echo "git is already installed"
+    echo "Git 用户名已存在: $CURRENT_GIT_NAME"
 fi
 
-git config --global user.name "$GIT_USER_NAME"
-git config --global user.email "$GIT_USER_EMAIL"
+if [ -z "$CURRENT_GIT_EMAIL" ]; then
+    read -p "请输入 Git 邮箱: " GIT_USER_EMAIL
+    git config --global user.email "$GIT_USER_EMAIL"
+    echo "Git 邮箱已设置为: $GIT_USER_EMAIL"
+else
+    echo "Git 邮箱已存在: $CURRENT_GIT_EMAIL"
+fi
 git config --global gitreview.remote origin
 git config --global gitreview.scheme ssh
 
@@ -32,10 +38,13 @@ echo 'eval "$(vfox activate bash)"' >> ~/.bashrc
 source ~/.bashrc
 
 # install golang
+GO_VERSION="1.24.6"
+GOPLS_VERSION="v0.18.1"
+
 vfox add golang
 #vfox search golang
-vfox install golang@1.24.6
-vfox use golang@1.24.6
+vfox install golang@$GO_VERSION
+vfox use golang@$GO_VERSION
 
 
 # install gopls golang language server
@@ -44,7 +53,7 @@ export GOBIN=$HOME/go/bin
 export GOPROXY=https://goproxy.cn,direct
 go version
 GO_ELF_FILE=$(realpath "$(which go)")
-go install -v golang.org/x/tools/gopls@v0.18.1
+go install -v golang.org/x/tools/gopls@$GOPLS_VERSION
 if [ -x $GOBIN/gopls ]; then
     echo "gopls installed successfully"
 else
