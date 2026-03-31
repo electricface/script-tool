@@ -53,11 +53,16 @@ export GOBIN=$HOME/go/bin
 export GOPROXY=https://goproxy.cn,direct
 go version
 GO_ELF_FILE=$(realpath "$(which go)")
-go install -v golang.org/x/tools/gopls@$GOPLS_VERSION
 if [ -x $GOBIN/gopls ]; then
-    echo "gopls installed successfully"
+    echo "gopls is already installed"
+    $GOBIN/gopls version
 else
-    echo "gopls installation failed"
+    go install -v golang.org/x/tools/gopls@$GOPLS_VERSION
+    if [ -x $GOBIN/gopls ]; then
+        echo "gopls installed successfully"
+    else
+        echo "gopls installation failed"
+    fi
 fi
 
 #go install -v golang.org/x/lint/golint@latest
