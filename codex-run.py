@@ -17,7 +17,6 @@ from pathlib import Path
 HOME = Path.home()
 CODEX_CONFIG = HOME / ".codex" / "config.toml"
 RUN_CONFIG_DIR = HOME / ".config" / "codex-run"
-RUN_CONFIG = RUN_CONFIG_DIR / "config.json"
 AUTH_CONFIG = RUN_CONFIG_DIR / "auth.json"
 
 
@@ -79,25 +78,11 @@ def cmd_use(provider):
         sys.exit(1)
     CODEX_CONFIG.write_text(new_text)
 
-    # Update ~/.config/codex-run/config.json
-    RUN_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    cfg = {}
-    if RUN_CONFIG.exists():
-        cfg = json.loads(RUN_CONFIG.read_text())
-    cfg["model_provider"] = provider
-    RUN_CONFIG.write_text(json.dumps(cfg, indent=2) + "\n")
-
     print(f"Switched to '{provider}'")
 
 
 def get_env_provider():
-    """Get the current model_provider from config.json, fallback to config.toml."""
-    if RUN_CONFIG.exists():
-        cfg = json.loads(RUN_CONFIG.read_text())
-        provider = cfg.get("model_provider", "")
-        if provider:
-            return provider
-    # Fallback to config.toml
+    """Get the current model_provider from config.toml."""
     return get_current_provider()
 
 
