@@ -70,7 +70,25 @@ codex-run -u ikun
 codex-run --use ikun
 ```
 
-此命令会更新 `~/.codex/config.toml` 中的 `model_provider = "ikun"`。
+此命令会同时更新：
+- `~/.codex/config.toml` 中的 `model_provider = "ikun"`
+- `~/.codex/auth.json` 中的 `OPENAI_API_KEY`（从 `~/.config/codex-run/auth.json` 读取对应密钥）
+
+输出示例：
+
+```
+found ikun_API_KEY (length: 28)
+updated OPENAI_API_KEY (length: 28)
+Switched to 'ikun'
+```
+
+若 `OPENAI_API_KEY` 已是最新值，则跳过写入：
+
+```
+found ikun_API_KEY (length: 28)
+OPENAI_API_KEY already set (length: 28)
+Switched to 'ikun'
+```
 
 ### 运行 codex
 
@@ -78,11 +96,7 @@ codex-run --use ikun
 codex-run
 ```
 
-自动根据当前 provider 从 `auth.json` 读取对应的 API Key，注入环境变量后运行 codex。运行前会打印环境变量名和密钥长度（不泄漏密钥内容）：
-
-```
-yescode_API_KEY (length: 28)
-```
+直接运行 codex。codex 会自动读取 `~/.codex/auth.json` 中的 `OPENAI_API_KEY`。
 
 ### 透传参数给 codex
 
@@ -101,7 +115,8 @@ codex-run -- resume --some-flag
 | 文件 | 路径 | 说明 |
 |------|------|------|
 | codex 配置 | `~/.codex/config.toml` | codex 原生配置，含 model_provider 和 providers 定义（唯一权威来源） |
-| 认证配置 | `~/.config/codex-run/auth.json` | API Key 存储，需手动创建 |
+| codex 认证 | `~/.codex/auth.json` | codex 读取的 API Key，由 `codex-run --use` 自动更新 |
+| 本地认证 | `~/.config/codex-run/auth.json` | 多 provider API Key 存储，需手动创建 |
 
 ## 错误提示
 

@@ -78,6 +78,28 @@ def cmd_use(provider):
         sys.exit(1)
     CODEX_CONFIG.write_text(new_text)
 
+    # Update ~/.codex/auth.json with OPENAI_API_KEY
+    codex_auth_path = HOME / ".codex" / "auth.json"
+    if not AUTH_CONFIG.exists():
+        print(f"Error: {AUTH_CONFIG} not found", file=sys.stderr)
+        sys.exit(1)
+    auth = json.loads(AUTH_CONFIG.read_text())
+    api_key = f"{provider}_API_KEY"
+    key_value = auth.get(api_key, "")
+    if not key_value:
+        print(f"Error: {api_key} not found in {AUTH_CONFIG}", file=sys.stderr)
+        sys.exit(1)
+
+    codex_auth = {}
+    if codex_auth_path.exists():
+        codex_auth = json.loads(codex_auth_path.read_text())
+    if codex_auth.get("OPENAI_API_KEY") != key_value:
+        codex_auth["OPENAI_API_KEY"] = key_value
+        codex_auth_path.write_text(json.dumps(codex_auth, indent=2) + "\n")
+        print(f"updated OPENAI_API_KEY (length: {len(key_value)})")
+    else:
+        print(f"OPENAI_API_KEY already set (length: {len(key_value)})")
+
     print(f"Switched to '{provider}'")
 
 
@@ -87,28 +109,7 @@ def get_env_provider():
 
 
 def run_codex(extra_args):
-    """Run codex with auth environment variables."""
-    provider = get_env_provider()
-    if not provider:
-        print("Error: no model_provider configured", file=sys.stderr)
-        sys.exit(1)
-
-    # Load auth config
-    if not AUTH_CONFIG.exists():
-        print(f"Error: {AUTH_CONFIG} not found", file=sys.stderr)
-        sys.exit(1)
-    auth = json.loads(AUTH_CONFIG.read_text())
-
-    # Build env key: provider -> PROVIDER_API_KEY
-    env_key = f"{provider}_API_KEY"
-    env_value = auth.get(env_key, "")
-    if not env_value:
-        print(f"Error: {env_key} not found in {AUTH_CONFIG}", file=sys.stderr)
-        sys.exit(1)
-
-    os.environ[env_key] = env_value
-    print(f"{env_key} (length: {len(env_value)})")
-
+    """Run codex """
     # Find codex binary
     codex_bin = shutil.which("codex")
     if not codex_bin:
